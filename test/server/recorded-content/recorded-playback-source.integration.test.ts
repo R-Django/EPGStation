@@ -36,11 +36,11 @@ const RecordedPlaybackSourceProvider = (
                 videoFileId: number,
                 expectedRecordedId: number,
                 playPosition: number,
+                option?: { cacheVideoInfo?: boolean },
             ): Promise<{
                 readonly state: string;
                 adopt():
-                    | { readonly status: 'adopted'; readonly source: Record<string, any> }
-                    | { readonly status: 'stale' };
+                    { readonly status: 'adopted'; readonly source: Record<string, any> } | { readonly status: 'stale' };
                 disposeBeforeAdoption(): Promise<void>;
             }>;
             resolveRecordedId(videoFileId: number): Promise<number>;
@@ -122,6 +122,42 @@ const bindTailLogger = (): (() => void) => {
 };
 
 describe('recorded playback source provider integration', () => {
+    it('reuses completed HLS metadata, then reprobes a replaced file and a recording in progress', async () => {
+        const root = await temporaryRoot();
+        const inputPath = join(root, 'recording.ts');
+        await writeFile(inputPath, 'first input');
+        const recorded = { id: 90, isRecording: false };
+        const videoUtil = {
+            getFullFilePathFromVideoFile: () => inputPath,
+            getInfo: vi.fn(async () => ({ bitRate: 64, duration: 60, size: 11 })),
+        };
+        const provider = new RecordedPlaybackSourceProvider(
+            { findId: async () => ({ id: 301, recordedId: 90, type: 'ts' }) },
+            { findId: async () => recorded },
+            videoUtil,
+        );
+        const open = async (cacheVideoInfo: boolean) => {
+            const source = await provider.open(301, 90, 0, { cacheVideoInfo });
+            await source.disposeBeforeAdoption();
+        };
+
+        await open(true);
+        await open(true);
+        expect(videoUtil.getInfo).toHaveBeenCalledTimes(1);
+
+        const replacement = join(root, 'replacement.ts');
+        await writeFile(replacement, 'other input');
+        await rename(replacement, inputPath);
+        await open(true);
+        expect(videoUtil.getInfo).toHaveBeenCalledTimes(2);
+
+        await open(false);
+        expect(videoUtil.getInfo).toHaveBeenCalledTimes(3);
+        recorded.isRecording = true;
+        await open(true);
+        await open(true);
+        expect(videoUtil.getInfo).toHaveBeenCalledTimes(5);
+    });
     it('rejects the second phase when its reread video-file mapping no longer matches the preliminary lease ID', async () => {
         const videoFileDB = {
             findId: vi
