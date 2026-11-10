@@ -16,7 +16,13 @@ describe('App Shell Socket.IO realtime connector implementation edges', () => {
     const union = /export type RealtimeEventName =\s*([^\n]*(?:\n[^\n]*)?)/u.exec(source)?.[1] ?? ''
     const names = [...union.matchAll(/'([^']+)'/gu)].map((match) => match[1])
 
-    expect(names).toStrictEqual(['connect', 'disconnect', 'updateStatus', 'updateEncode'])
+    expect(names).toStrictEqual([
+      'connect',
+      'disconnect',
+      'updateStatus',
+      'updateEncode',
+      'hlsReady',
+    ])
   })
 
   it('keeps the realtime event to query invalidation matrix explicit and comprehensive', () => {
