@@ -55,6 +55,10 @@ export function usePlaybackSeekFrame(
     if (!visibleRef.current) return
     const video = videoRef.current
     if (video === null) return
+    if (pausedAtSeekRef.current && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      clear()
+      return
+    }
     if (typeof video.requestVideoFrameCallback === 'function') {
       video.requestVideoFrameCallback(() => clear())
     } else if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -64,9 +68,9 @@ export function usePlaybackSeekFrame(
 
   const onCanPlay = useCallback(() => {
     if (pausedAtSeekRef.current) {
-      onSeeked()
+      clear()
     }
-  }, [onSeeked])
+  }, [clear])
 
   useEffect(() => {
     if (lifecycleState === 'error') {

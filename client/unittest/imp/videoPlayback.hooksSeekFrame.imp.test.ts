@@ -52,6 +52,23 @@ describe('seek frame for playback formats', () => {
     expect(result.current.visible).toBe(false)
   })
 
+  it('clears a paused in-place seek when seeked fires after the new frame was presented', () => {
+    const video = makeVideo()
+    video.requestVideoFrameCallback = vi.fn(() => 1)
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      drawImage: vi.fn(),
+    } as never)
+    const videoRef = { current: video } as MutableRefObject<HTMLVideoElement | null>
+    const { result } = renderHook(() => usePlaybackSeekFrame(videoRef, 'ready'))
+    result.current.canvasRef.current = document.createElement('canvas')
+
+    act(() => result.current.capture(true))
+    act(() => result.current.onSeeked())
+
+    expect(result.current.visible).toBe(false)
+    expect(video.requestVideoFrameCallback).not.toHaveBeenCalled()
+  })
+
   it('keeps the normal player when a frame cannot be captured', () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
     const videoRef = { current: makeVideo() } as MutableRefObject<HTMLVideoElement | null>

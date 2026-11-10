@@ -98,6 +98,15 @@ export function PlaybackPlayerContainer({
     lifecycleState: lifecycleSnapshot.state,
     recordedStreamDuration,
   })
+  const {
+    canvasRef: seekCanvasRef,
+    visible: seekFrameVisible,
+    capture: captureSeekFrame,
+    onCanPlay: clearSeekFrameOnCanPlay,
+    onPlaying: clearSeekFrameOnPlaying,
+    onSeeked: clearSeekFrameOnSeeked,
+    onError: clearSeekFrameOnError,
+  } = usePlaybackSeekFrame(videoRef, lifecycleSnapshot.state)
   const isSubtitleRendererMounted =
     sourceKind === 'hls-stream' || streamingType === 'hls' || streamingType === 'm2tsll'
   const isMobilePlatform = useMemo(() => detectMobilePlatform(), [])
@@ -116,6 +125,7 @@ export function PlaybackPlayerContainer({
     effectiveMediaUrl,
     usesHlsJsMediaSource: lifecycle.usesHlsJsMediaSource,
     usesMpegtsMediaSource: lifecycle.usesMpegtsMediaSource,
+    onFatalHlsError: clearSeekFrameOnError,
   })
   const subtitles = usePlaybackSubtitles({
     videoRef,
@@ -171,15 +181,6 @@ export function PlaybackPlayerContainer({
       viewportWidth,
     ],
   )
-  const {
-    canvasRef: seekCanvasRef,
-    visible: seekFrameVisible,
-    capture: captureSeekFrame,
-    onCanPlay: clearSeekFrameOnCanPlay,
-    onPlaying: clearSeekFrameOnPlaying,
-    onSeeked: clearSeekFrameOnSeeked,
-    onError: clearSeekFrameOnError,
-  } = usePlaybackSeekFrame(videoRef, lifecycleSnapshot.state)
   const seek = usePlaybackSeek({
     kind,
     videoRef,
