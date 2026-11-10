@@ -17,6 +17,7 @@ import { usePlaybackLifecycle } from './hooks/usePlaybackLifecycle'
 import { usePlaybackMediaElement } from './hooks/usePlaybackMediaElement'
 import { usePlaybackMediaSources } from './hooks/usePlaybackMediaSources'
 import { usePlaybackSeek } from './hooks/usePlaybackSeek'
+import { usePlaybackSeekFrame } from './hooks/usePlaybackSeekFrame'
 import { usePlaybackSubtitles } from './hooks/usePlaybackSubtitles'
 import { usePlaybackVideoEvents } from './hooks/usePlaybackVideoEvents'
 import { usePlaybackWaitingStatus } from './hooks/usePlaybackWaitingStatus'
@@ -170,6 +171,15 @@ export function PlaybackPlayerContainer({
       viewportWidth,
     ],
   )
+  const {
+    canvasRef: seekCanvasRef,
+    visible: seekFrameVisible,
+    capture: captureSeekFrame,
+    onCanPlay: clearSeekFrameOnCanPlay,
+    onPlaying: clearSeekFrameOnPlaying,
+    onSeeked: clearSeekFrameOnSeeked,
+    onError: clearSeekFrameOnError,
+  } = usePlaybackSeekFrame(videoRef, lifecycleSnapshot.state)
   const seek = usePlaybackSeek({
     kind,
     videoRef,
@@ -183,6 +193,7 @@ export function PlaybackPlayerContainer({
     activeBaseSeekSeconds: lifecycle.activeBaseSeekSeconds,
     activePlaybackStartUrl: lifecycle.activePlaybackStartUrl,
     restartPlaybackAt: lifecycle.restartPlaybackAt,
+    onBeforeSeek: captureSeekFrame,
   })
   const volumeLabel = resolveVolumeControlLabel({ volume: media.volume, muted: media.muted })
   const volumeIcon = resolveVolumeControlIcon({ volume: media.volume, muted: media.muted })
@@ -202,6 +213,12 @@ export function PlaybackPlayerContainer({
     areControlsSuppressed,
     suppressCanPlayControlsVisible,
     shouldClearLoadingOnPlaybackEvent: streamingType !== 'm2tsll',
+    seekFrame: {
+      onCanPlay: clearSeekFrameOnCanPlay,
+      onPlaying: clearSeekFrameOnPlaying,
+      onSeeked: clearSeekFrameOnSeeked,
+      onError: clearSeekFrameOnError,
+    },
   })
 
   return (
@@ -243,6 +260,13 @@ export function PlaybackPlayerContainer({
         assignVideoRef={assignVideoRef}
         src={lifecycle.videoElementSrc}
         {...videoEvents}
+      />
+      <canvas
+        ref={seekCanvasRef}
+        aria-hidden="true"
+        className={styles.seekFrame}
+        data-visible={String(seekFrameVisible)}
+        data-testid="playback-seek-frame"
       />
       {isPlayerLoading ? (
         <div
