@@ -51,6 +51,12 @@ function setup(
     handleTimeUpdate: vi.fn(),
     seekBy: vi.fn(),
   }
+  const seekFrame = {
+    onCanPlay: vi.fn(),
+    onPlaying: vi.fn(),
+    onSeeked: vi.fn(),
+    onError: vi.fn(),
+  }
   const fullscreen = {
     toggleFullscreen: vi.fn(),
     refreshPictureInPictureSupport: vi.fn(),
@@ -62,6 +68,7 @@ function setup(
       controls: controls as never,
       subtitles: subtitles as never,
       seek: seek as never,
+      seekFrame: seekFrame as never,
       fullscreen: fullscreen as never,
       areControlsBlocked: overrides.areControlsBlocked ?? false,
       areControlsSuppressed: overrides.areControlsSuppressed ?? false,
@@ -70,10 +77,23 @@ function setup(
     }),
   )
 
-  return { result, media, controls, subtitles, seek, fullscreen }
+  return { result, media, controls, subtitles, seek, seekFrame, fullscreen }
 }
 
 describe('usePlaybackVideoEvents contract', () => {
+  it('[AC 5.7] removes the retained seek frame when new playback begins or fails', () => {
+    const { result, seekFrame } = setup()
+
+    act(() => result.current.videoEvents.onCanPlay())
+    expect(seekFrame.onCanPlay).toHaveBeenCalledOnce()
+    act(() => result.current.videoEvents.onPlaying())
+    expect(seekFrame.onPlaying).toHaveBeenCalledOnce()
+    act(() => result.current.videoEvents.onSeeked())
+    expect(seekFrame.onSeeked).toHaveBeenCalledOnce()
+    act(() => result.current.videoEvents.onError())
+    expect(seekFrame.onError).toHaveBeenCalledOnce()
+  })
+
   it('reveals controls on canplay while paused and not suppressed', () => {
     const { result, controls } = setup({ isPaused: true })
 
