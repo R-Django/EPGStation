@@ -26,9 +26,11 @@ describe('seek frame for playback formats', () => {
     result.current.canvasRef.current = document.createElement('canvas')
 
     act(() => result.current.capture(false))
+    act(() => result.current.capture(false))
     expect(result.current.visible).toBe(true)
     expect(result.current.canvasRef.current?.width).toBe(1920)
     expect(drawImage).toHaveBeenCalledWith(video, 0, 0, 1920, 1080)
+    expect(drawImage).toHaveBeenCalledOnce()
     act(() => result.current.onCanPlay())
     expect(result.current.visible).toBe(true)
     act(() => result.current.onPlaying())
