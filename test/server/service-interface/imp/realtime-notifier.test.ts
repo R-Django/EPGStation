@@ -28,6 +28,27 @@ describe('Socket.IO status destination failure isolation [SI-7.3]', () => {
         expect(emit.mock.calls[1]).toEqual(['updateStatus']);
     });
 
+    it('keeps sending HLS readiness to other listeners when one listener throws', () => {
+        const failure = new Error('synthetic HLS listener failure');
+        const logError = vi.fn();
+        const model = new SocketIOManageModel(
+            { getLogger: () => ({ system: { error: logError } }) },
+            { getConfig: () => ({}) },
+        );
+        const failedEmit = vi.fn(() => {
+            throw failure;
+        });
+        const deliveredEmit = vi.fn();
+        model.ios = [{ sockets: { emit: failedEmit } }, { sockets: { emit: deliveredEmit } }];
+
+        model.notifyHlsReady(7, '12345678-1234-4234-8234-123456789abc');
+
+        const payload = ['hlsReady', { streamId: 7, startRequestId: '12345678-1234-4234-8234-123456789abc' }];
+        expect(failedEmit).toHaveBeenCalledExactlyOnceWith(...payload);
+        expect(deliveredEmit).toHaveBeenCalledExactlyOnceWith(...payload);
+        expect(logError).toHaveBeenCalledExactlyOnceWith(failure);
+    });
+
     it('resets the timer before delivery, logs one synchronous failure, and continues without an unhandled timer error', async () => {
         vi.useFakeTimers();
 
