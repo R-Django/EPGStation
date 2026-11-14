@@ -64,6 +64,7 @@ export default abstract class RecordedStreamBaseModel
     private streamProcess: ChildProcess | null = null;
     private streamProcessHandle: ManagedProcessHandle | null = null;
     private hlsWriterHandle: HlsWriterHandle | null = null;
+    private detachEarlyWriterTerminal: (() => void) | undefined;
     /**
      * 現在進行中の `start()` 呼び出しの世代を表すトークン。`stop()`/`stopInternal`は
      * このトークンをキーに、世代ごとに独立した後始末・停止済み判定を行う。
@@ -113,7 +114,7 @@ export default abstract class RecordedStreamBaseModel
         this.videoUtil = videoUtil;
     }
 
-    public async startHlsWriterEarly(streamId: apid.StreamId): Promise<void> {
+    public async startHlsWriterEarly(streamId: apid.StreamId, onTerminal: (error: Error) => void): Promise<void> {
         const generation = {};
         this.processStartGeneration = generation;
         const option = this.buildProcessOption(streamId, null, 'ts');
@@ -122,7 +123,7 @@ export default abstract class RecordedStreamBaseModel
 
         this.log.stream.info(createEncodeProcessLogMessage(option.cmd));
         try {
-            await this.startHlsWriter(option, finalization, generation);
+            await this.startHlsWriter(option, finalization, generation, onTerminal);
         } catch (error: unknown) {
             this.log.stream.error(createEncodeProcessFailureLogMessage(option.cmd));
             throw new Error('CreateStreamProcessError', { cause: error });
@@ -137,6 +138,7 @@ export default abstract class RecordedStreamBaseModel
         option: CreateProcessOption,
         finalization: HlsStopFinalization,
         generation: object,
+        onEarlyTerminal?: (error: Error) => void,
     ): Promise<void> {
         this.pendingProcessStartGenerations.add(generation);
         this.beginHlsWriterStart(finalization);
@@ -158,10 +160,33 @@ export default abstract class RecordedStreamBaseModel
             result.child.stderr?.on('data', data => {
                 this.log.stream.debug(String(data));
             });
+            if (onEarlyTerminal !== undefined) {
+                this.observeEarlyWriterTerminal(result.child, generation, onEarlyTerminal);
+            }
         } finally {
             this.completeHlsWriterStart(finalization);
             this.finishProcessStartGeneration(generation);
         }
+    }
+
+    private observeEarlyWriterTerminal(child: ChildProcess, generation: object, notify: (error: Error) => void): void {
+        const onTerminal = () => {
+            detach();
+            if (this.isCurrentStart(generation)) {
+                notify(new Error('CreateStreamProcessError'));
+            }
+        };
+        const detach = () => {
+            child.off('exit', onTerminal);
+            child.off('close', onTerminal);
+            child.off('error', onTerminal);
+            this.detachEarlyWriterTerminal = undefined;
+        };
+        this.detachEarlyWriterTerminal = detach;
+        child.once('exit', onTerminal);
+        child.once('close', onTerminal);
+        child.once('error', onTerminal);
+        if (ProcessUtil.isExited(child) || child.signalCode != null) onTerminal();
     }
 
     /**
@@ -253,6 +278,7 @@ export default abstract class RecordedStreamBaseModel
         }
 
         // パイプ処理
+        this.detachEarlyWriterTerminal?.();
         const inputReader = this.sourceReader?.readable ?? this.fileStream;
         if (this.streamProcess.stdin !== null && inputReader !== null) {
             // ts が入力かつ、HLS 配信の場合は arib-subtitle-timedmetadater を通す
@@ -517,6 +543,7 @@ export default abstract class RecordedStreamBaseModel
         if (processStartGeneration !== undefined) {
             this.stoppedProcessStartGenerations.add(processStartGeneration);
         }
+        this.detachEarlyWriterTerminal?.();
         this.deferPlaybackSourceRelease();
         const streamProcessHandle = this.streamProcessHandle;
         const hlsWriterHandle = this.hlsWriterHandle;

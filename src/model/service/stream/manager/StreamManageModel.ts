@@ -227,6 +227,13 @@ class StreamManageModel implements IStreamManageModel {
                     const isActive = () => this.canSettleStart(active);
                     const configureEarlyHls = option.configureEarlyHls;
                     let earlyStart: Promise<void> | undefined;
+                    const failEarlyStart = (error: unknown) => {
+                        if (isActive()) {
+                            this.logStreamError('start stream error');
+                            this.logStreamError(error);
+                            this.rejectStart(active, active.mapStartError(error), 'start-failed');
+                        }
+                    };
                     const onCompletedTsResolved = () => {
                         if (configureEarlyHls === undefined || !isActive()) return;
                         earlyStart = (async () => {
@@ -239,15 +246,9 @@ class StreamManageModel implements IStreamManageModel {
                             if (!isActive()) return;
 
                             this.attachStream(active, candidate);
-                            await candidate.startHlsWriterEarly(active.id);
+                            await candidate.startHlsWriterEarly(active.id, failEarlyStart);
                         })();
-                        void earlyStart.catch((error: unknown) => {
-                            if (isActive()) {
-                                this.logStreamError('start stream error');
-                                this.logStreamError(error);
-                                this.rejectStart(active, active.mapStartError(error), 'start-failed');
-                            }
-                        });
+                        void earlyStart.catch(failEarlyStart);
                     };
                     const delivery =
                         configureEarlyHls === undefined
