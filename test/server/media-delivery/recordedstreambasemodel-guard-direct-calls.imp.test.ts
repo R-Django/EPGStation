@@ -42,6 +42,12 @@ describe('RecordedStreamBaseModel guard direct calls (unittest/imp)', () => {
         await expect(model.start(0)).rejects.toThrow('ProcessOptionIsNull');
     });
 
+    it('rejects early HLS writer startup before any option is set', async () => {
+        const { model } = createSubject();
+
+        await expect(model.startHlsWriterEarly(0, vi.fn())).rejects.toThrow('ProcessOptionIsNull');
+    });
+
     it('[R2-RECORDED-START-SETVIDEOFILEINFO-INCOMPLETE] start() rejects when setVideFileInfo leaves the video fields unset (L143–145)', async () => {
         const { model } = createSubject();
         model.setOption({ cmd: '%NODE%', playPosition: 0, videoFileId: 1 }, 0);

@@ -360,13 +360,7 @@ describe('encode process boundary', () => {
             videoUtil,
         );
         model.getVideoInfo = vi.fn(async () => ({ bitRate: 8, duration: 30, size: 30 }));
-        const processOptionCreated = deferred<void>();
-        const createProcessOption = model.createProcessOption.bind(model);
-        model.createProcessOption = vi.fn(async (streamId: number) => {
-            const option = await createProcessOption(streamId);
-            processOptionCreated.resolve();
-            return option;
-        });
+        const recordedStart = vi.spyOn(model, 'start');
         model.setOption({ cmd: '%NODE% synthetic-recorded-late', playPosition: 0, videoFileId: 31 }, 0);
         const notifyClient = vi.fn();
         const manager = new StreamManageModel({ getLogger: logger }, executionManager(), { notifyClient });
@@ -387,8 +381,7 @@ describe('encode process boundary', () => {
         expect(notifyClient).toHaveBeenCalledTimes(5);
         const notificationsBeforeLateResources = notifyClient.mock.calls.length;
         pendingContent.resolve({ id: 31, recordedId: 41, type: 'encoded' });
-        await processOptionCreated.promise;
-        await Promise.resolve();
+        await recordedStart.mock.results[0].value;
 
         expect(processManager.createManaged).not.toHaveBeenCalled();
         expect(processManager.requestStop).not.toHaveBeenCalled();

@@ -35,6 +35,8 @@ export interface RecordedStreamStartOption {
     readonly usesManagedId: boolean;
     readonly videoFileId: number;
     configure(stream: IRecordedStreamBaseModel, source: RecordedPlaybackSource): void;
+    /** 完了済みTSのHLSコマンドが先行起動に対応する場合にoptionを設定する。 */
+    configureEarlyHls?(stream: IRecordedStreamBaseModel): boolean;
 }
 
 /**

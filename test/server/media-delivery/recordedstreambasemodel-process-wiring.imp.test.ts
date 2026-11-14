@@ -95,7 +95,10 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         const { child, log, model } = makeSubject();
         const readable = new PassThrough();
         const pipe = vi.spyOn(readable, 'pipe');
-        model.adoptPlaybackSource(readerSource({ close: vi.fn(async () => undefined), readable }), async () => undefined);
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
 
         await model.start(0);
 
@@ -107,7 +110,10 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         const { child, log, model } = makeSubject({ hls: true });
         const readable = new PassThrough();
         const pipe = vi.spyOn(readable, 'pipe');
-        model.adoptPlaybackSource(readerSource({ close: vi.fn(async () => undefined), readable }), async () => undefined);
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
 
         await model.start(3);
 
@@ -118,6 +124,89 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         expect(transform._readableState.pipes).toContain(child.stdin);
     });
 
+    it('connects the completed recording to the already running HLS writer', async () => {
+        const { child, fileDeleter, model, processManager } = makeSubject({ hls: true });
+        const readable = new PassThrough();
+        const pipe = vi.spyOn(readable, 'pipe');
+
+        await model.startHlsWriterEarly(3, vi.fn());
+        expect(processManager.createHlsWriter).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ input: null, report: { kind: 'hls', streamId: 3 } }),
+        );
+        expect(pipe).not.toHaveBeenCalled();
+
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
+        await model.start(3);
+
+        expect(processManager.createHlsWriter).toHaveBeenCalledOnce();
+        expect(fileDeleter.deleteAllFiles).toHaveBeenCalledOnce();
+        const transform = pipe.mock.calls[0][0] as any;
+        expect(transform._readableState.pipes).toContain(child.stdin);
+    });
+
+    it.each(['exit', 'close', 'error'] as const)(
+        'reports an early HLS writer %s once before connecting input',
+        async event => {
+            const { child, model } = makeSubject({ hls: true });
+            const onTerminal = vi.fn();
+
+            await model.startHlsWriterEarly(3, onTerminal);
+            expect(onTerminal).not.toHaveBeenCalled();
+            child.emit(event, new Error('synthetic writer failure'));
+            child.emit('close');
+
+            expect(onTerminal).toHaveBeenCalledExactlyOnceWith(new Error('CreateStreamProcessError'));
+            for (const name of ['exit', 'close', 'error']) {
+                expect(child.listenerCount(name)).toBe(0);
+            }
+        },
+    );
+
+    it.each([{ exitCode: 1 }, { signalCode: 'SIGTERM' }])(
+        'reports an early HLS writer that has already terminated (%j)',
+        async terminalStatus => {
+            const child = Object.assign(fakeChild(), terminalStatus);
+            const { model } = makeSubject({ hls: true, child });
+            const onTerminal = vi.fn();
+
+            await model.startHlsWriterEarly(3, onTerminal);
+
+            expect(onTerminal).toHaveBeenCalledExactlyOnceWith(new Error('CreateStreamProcessError'));
+            expect(child.listenerCount('close')).toBe(0);
+        },
+    );
+
+    it('logs an early HLS writer stdin error and stderr output before connecting input', async () => {
+        const { child, log, model } = makeSubject({ hls: true });
+        const failure = new Error('synthetic writer stdin error');
+
+        await model.startHlsWriterEarly(3, vi.fn());
+        child.stdin.emit('error', failure);
+        child.stderr.write('synthetic writer stderr');
+
+        expect(log.stream.error).toHaveBeenCalledWith('stream process stdin error');
+        expect(log.stream.error).toHaveBeenCalledWith(failure);
+        expect(log.stream.debug).toHaveBeenCalledWith('synthetic writer stderr');
+    });
+
+    it('rejects input connection if the early HLS writer has lost stdin', async () => {
+        const { child, model } = makeSubject({ hls: true });
+        const readable = new PassThrough();
+        const pipe = vi.spyOn(readable, 'pipe');
+        await model.startHlsWriterEarly(3, vi.fn());
+        child.stdin.destroy();
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
+
+        await expect(model.start(3)).rejects.toThrow('CreateStreamProcessError');
+        expect(pipe).not.toHaveBeenCalled();
+    });
+
     it('[MD-10.2] starts without piping when the process has no stdin, and without reading stderr when it has none', async () => {
         const child = fakeChild();
         child.stdin = null;
@@ -125,7 +214,10 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         const { model } = makeSubject({ child });
         const readable = new PassThrough();
         const pipe = vi.spyOn(readable, 'pipe');
-        model.adoptPlaybackSource(readerSource({ close: vi.fn(async () => undefined), readable }), async () => undefined);
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
 
         await expect(model.start(0)).resolves.toBeUndefined();
 
@@ -142,18 +234,21 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         await vi.waitFor(() => expect(log.stream.debug).toHaveBeenCalledWith('synthetic stderr line'));
     });
 
-    it.each(['exit', 'error'])('[MD-10.2] notifies the exit callback once when a non-HLS process emits %s', async event => {
-        const { child, model } = makeSubject();
-        model.adoptPlaybackSource(directSource(), async () => undefined);
-        const onExit = vi.fn();
-        model.setExitStream(onExit);
-        await model.start(0);
-        expect(onExit).not.toHaveBeenCalled();
+    it.each(['exit', 'error'])(
+        '[MD-10.2] notifies the exit callback once when a non-HLS process emits %s',
+        async event => {
+            const { child, model } = makeSubject();
+            model.adoptPlaybackSource(directSource(), async () => undefined);
+            const onExit = vi.fn();
+            model.setExitStream(onExit);
+            await model.start(0);
+            expect(onExit).not.toHaveBeenCalled();
 
-        child.emit(event, new Error('synthetic'));
+            child.emit(event, new Error('synthetic'));
 
-        await vi.waitFor(() => expect(onExit).toHaveBeenCalledOnce());
-    });
+            await vi.waitFor(() => expect(onExit).toHaveBeenCalledOnce());
+        },
+    );
 
     it('[MD-10.2] notifies the exit callback and drops the listeners when the process had already exited at start', async () => {
         const child = fakeChild();
@@ -219,7 +314,9 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
 
     it('[MD-10.2] logs only the error itself when a cleanup step without a message fails', async () => {
         const failure = new Error('synthetic stop failure');
-        const { log, model } = makeSubject({ processManager: { requestStop: vi.fn(async () => Promise.reject(failure)) } });
+        const { log, model } = makeSubject({
+            processManager: { requestStop: vi.fn(async () => Promise.reject(failure)) },
+        });
         await model.start(0);
 
         await model.stop();
@@ -301,7 +398,10 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
 
     it('[MD-10.2] leaves the stream placeholders of a non-HLS command untouched and passes no output', async () => {
         const { model } = makeSubject();
-        model.setOption({ cmd: '%FFMPEG% -dir %streamFileDir% -n %streamNum% -ss %SS%', playPosition: 7, videoFileId: 1 }, 0);
+        model.setOption(
+            { cmd: '%FFMPEG% -dir %streamFileDir% -n %streamNum% -ss %SS%', playPosition: 7, videoFileId: 1 },
+            0,
+        );
         Object.assign(model, { videoFileInfo: videoInfo, videoFilePath: 'synthetic/file.mp4' });
 
         const option = await model.createProcessOption(5);

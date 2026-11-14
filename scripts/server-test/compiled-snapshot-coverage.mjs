@@ -2373,7 +2373,7 @@ export const COVERAGE_EXCLUSION_AUTHORIZATIONS = Object.freeze([
         alternativeOwnerEntries: Object.freeze(['test/server/media-delivery/**/*.test.ts']),
         boundFunctions: Object.freeze([
             Object.freeze({ codeSha256: '8a14ad383ad59694b2b9a25b14570c9cb158ef80a1c47803fb2f9b1d6781e1b0', name: 'RecordedStreamBaseModel.observeManagedProcessTerminal' }),
-            Object.freeze({ codeSha256: '06a19763fea06b295b221364556004d9398edfe8c8c1f1c8282d49b4415dae4c', name: 'RecordedStreamBaseModel.start' }),
+            Object.freeze({ codeSha256: '7560a045c0eb1ff8619b4afb55c78308dd5726151620bb73e86da4eb60da7e67', name: 'RecordedStreamBaseModel.start' }),
         ]),
         branchAnchors: Object.freeze([
             Object.freeze({
@@ -2399,11 +2399,11 @@ export const COVERAGE_EXCLUSION_AUTHORIZATIONS = Object.freeze([
     Object.freeze({
         alternativeOwnerEntries: Object.freeze(['test/server/media-delivery/**/*.test.ts']),
         boundFunctions: Object.freeze([
-            Object.freeze({ codeSha256: '71e819f72dcb90f95be695c114df989c165ea846a8270359a826b9ec60d816c5', name: 'StreamManageModel.startRecorded' }),
+            Object.freeze({ codeSha256: '2e9363943e1155505370e76fd109e2071b8dd6d17d56be5a5ccb294defbe802b', name: 'StreamManageModel.startRecorded' }),
             Object.freeze({ codeSha256: '3338f726560921160f5ecb4da175d62982ac8ecb84cf57da0d9a70042054ea69', name: 'StreamManageModel.startInternal' }),
-            Object.freeze({ codeSha256: 'f75db449b58f471fe36682e6e658718ebb5bbdfee7e2b70bf458071694af57da', name: 'StreamManageModel.createActiveStream' }),
+            Object.freeze({ codeSha256: '84914a3dd4730ca13723817818beb6fd93f7757947d7f1818242c266736beba3', name: 'StreamManageModel.createActiveStream' }),
             Object.freeze({ codeSha256: 'f875cb885d2814ca938cef81b3b0eaa1ea64247b835a230c1809244517f13501', name: 'StreamManageModel.attachStream' }),
-            Object.freeze({ codeSha256: 'ec3ec5440b329ff38a8035780559e5a24756127f84241e2623f12ec224f47f19', name: 'StreamManageModel.runStart' }),
+            Object.freeze({ codeSha256: '01acbc66fd08006b6b9d183a735139eeb2da2dff61220bc01ef743555d98bc17', name: 'StreamManageModel.runStart' }),
             Object.freeze({ codeSha256: 'b99db1af0f4c4161d6c33536e22e4c6ca0b0635b055c48e3efca3bf1f73bf6b0', name: 'StreamManageModel.rejectStart' }),
             Object.freeze({ codeSha256: 'f9e05c314ea58a577b8411fd095ced8c3790b6bf42b44ebef198313a25ceb80e', name: 'StreamManageModel.finalizeActive' }),
         ]),
@@ -2411,8 +2411,8 @@ export const COVERAGE_EXCLUSION_AUTHORIZATIONS = Object.freeze([
             Object.freeze({
                 code: '{ throw new Error ( \'RecordedStreamStartNotAdopted\' ) ; }',
                 functionName: 'StreamManageModel.startRecorded',
-                tokenEnd: 367,
-                tokenStart: 358,
+                tokenEnd: 649,
+                tokenStart: 640,
             }),
         ]),
         decisionIdentity: 'stream-manage-startrecorded-notadopted-guard-authorization',
@@ -2423,26 +2423,26 @@ export const COVERAGE_EXCLUSION_AUTHORIZATIONS = Object.freeze([
             Object.freeze({
                 code: 'throw',
                 functionName: 'StreamManageModel.startRecorded',
-                tokenEnd: 360,
-                tokenStart: 359,
+                tokenEnd: 642,
+                tokenStart: 641,
             }),
             Object.freeze({
                 code: 'new',
                 functionName: 'StreamManageModel.startRecorded',
-                tokenEnd: 361,
-                tokenStart: 360,
+                tokenEnd: 643,
+                tokenStart: 642,
             }),
             Object.freeze({
                 code: 'Error',
                 functionName: 'StreamManageModel.startRecorded',
-                tokenEnd: 362,
-                tokenStart: 361,
+                tokenEnd: 644,
+                tokenStart: 643,
             }),
             Object.freeze({
                 code: '\'RecordedStreamStartNotAdopted\'',
                 functionName: 'StreamManageModel.startRecorded',
-                tokenEnd: 364,
-                tokenStart: 363,
+                tokenEnd: 646,
+                tokenStart: 645,
             }),
         ]),
     }),

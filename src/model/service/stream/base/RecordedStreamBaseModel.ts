@@ -64,6 +64,7 @@ export default abstract class RecordedStreamBaseModel
     private streamProcess: ChildProcess | null = null;
     private streamProcessHandle: ManagedProcessHandle | null = null;
     private hlsWriterHandle: HlsWriterHandle | null = null;
+    private detachEarlyWriterTerminal: (() => void) | undefined;
     /**
      * 現在進行中の `start()` 呼び出しの世代を表すトークン。`stop()`/`stopInternal`は
      * このトークンをキーに、世代ごとに独立した後始末・停止済み判定を行う。
@@ -113,6 +114,81 @@ export default abstract class RecordedStreamBaseModel
         this.videoUtil = videoUtil;
     }
 
+    public async startHlsWriterEarly(streamId: apid.StreamId, onTerminal: (error: Error) => void): Promise<void> {
+        const generation = {};
+        this.processStartGeneration = generation;
+        const option = this.buildProcessOption(streamId, null, 'ts');
+        const finalization = await this.prepStreamDir(streamId);
+        if (!this.isCurrentStart(generation)) return;
+
+        this.log.stream.info(createEncodeProcessLogMessage(option.cmd));
+        try {
+            await this.startHlsWriter(option, finalization, generation, onTerminal);
+        } catch (error: unknown) {
+            this.log.stream.error(createEncodeProcessFailureLogMessage(option.cmd));
+            throw new Error('CreateStreamProcessError', { cause: error });
+        }
+    }
+
+    private isCurrentStart(generation: object): boolean {
+        return this.processStartGeneration === generation && !this.stoppedProcessStartGenerations.has(generation);
+    }
+
+    private async startHlsWriter(
+        option: CreateProcessOption,
+        finalization: HlsStopFinalization,
+        generation: object,
+        onEarlyTerminal?: (error: Error) => void,
+    ): Promise<void> {
+        this.pendingProcessStartGenerations.add(generation);
+        this.beginHlsWriterStart(finalization);
+        try {
+            const result = await this.processManager.createHlsWriter(option);
+            if (!this.isCurrentStart(generation)) {
+                await this.stopLateHlsWriterAndCleanupArtifacts(finalization, () =>
+                    this.processManager.stopHls(result.handle),
+                );
+                return;
+            }
+            this.activeHlsWriterFinalizations.add(finalization);
+            this.streamProcess = result.child;
+            this.hlsWriterHandle = result.handle;
+            result.child.stdin?.on('error', (error: Error) => {
+                this.log.stream.error('stream process stdin error');
+                this.log.stream.error(error);
+            });
+            result.child.stderr?.on('data', data => {
+                this.log.stream.debug(String(data));
+            });
+            if (onEarlyTerminal !== undefined) {
+                this.observeEarlyWriterTerminal(result.child, generation, onEarlyTerminal);
+            }
+        } finally {
+            this.completeHlsWriterStart(finalization);
+            this.finishProcessStartGeneration(generation);
+        }
+    }
+
+    private observeEarlyWriterTerminal(child: ChildProcess, generation: object, notify: (error: Error) => void): void {
+        const onTerminal = () => {
+            detach();
+            if (this.isCurrentStart(generation)) {
+                notify(new Error('CreateStreamProcessError'));
+            }
+        };
+        const detach = () => {
+            child.off('exit', onTerminal);
+            child.off('close', onTerminal);
+            child.off('error', onTerminal);
+            this.detachEarlyWriterTerminal = undefined;
+        };
+        this.detachEarlyWriterTerminal = detach;
+        child.once('exit', onTerminal);
+        child.once('close', onTerminal);
+        child.once('error', onTerminal);
+        if (ProcessUtil.isExited(child) || child.signalCode != null) onTerminal();
+    }
+
     /**
      * ストリーム開始。動画情報の取得・（必要なら）HLSディレクトリ準備・ファイル読み出し
      * stream の生成・エンコードプロセス起動を順に行う。`processStartGeneration`で
@@ -121,12 +197,13 @@ export default abstract class RecordedStreamBaseModel
      * @param streamId 配信の識別子。HLSの場合は出力ファイル名にも使われる。
      */
     public async start(streamId: apid.StreamId): Promise<void> {
-        const processStartGeneration = {};
+        const writerStarted = this.hlsWriterHandle !== null;
+        const processStartGeneration = writerStarted ? this.processStartGeneration! : {};
         this.processStartGeneration = processStartGeneration;
         let hlsStopFinalization: HlsStopFinalization | null = null;
 
         // HLS stream ディレクトリ使用準備
-        if (this.getStreamType() === 'RecordedHLS') {
+        if (this.getStreamType() === 'RecordedHLS' && !writerStarted) {
             try {
                 hlsStopFinalization = await this.prepStreamDir(streamId);
             } catch (error) {
@@ -140,6 +217,7 @@ export default abstract class RecordedStreamBaseModel
         }
 
         await this.setVideFileInfo();
+        if (!this.isCurrentStart(processStartGeneration)) return;
         if (this.videoFilePath === null || this.videoFileInfo === null) {
             throw new Error('SetVideoFileInfoError');
         }
@@ -160,64 +238,20 @@ export default abstract class RecordedStreamBaseModel
             throw new Error('FileStreamSetError', { cause: err });
         }
 
-        // エンコードプロセス生成
-        const poption = await this.createProcessOption(streamId);
-        if (
-            this.stoppedProcessStartGenerations.has(processStartGeneration) ||
-            this.processStartGeneration !== processStartGeneration
-        ) {
+        if (!writerStarted) {
+            await this.startStreamProcess(streamId, hlsStopFinalization, processStartGeneration);
+        }
+        if (!this.isCurrentStart(processStartGeneration)) {
             return;
         }
-        this.pendingProcessStartGenerations.add(processStartGeneration);
-        this.log.stream.info(createEncodeProcessLogMessage(poption.cmd));
-        try {
-            if (this.getStreamType() === 'RecordedHLS') {
-                const finalization = hlsStopFinalization!;
-                this.beginHlsWriterStart(finalization);
-                const result = await this.processManager.createHlsWriter(poption);
-                if (
-                    this.stoppedProcessStartGenerations.has(processStartGeneration) ||
-                    this.processStartGeneration !== processStartGeneration
-                ) {
-                    await this.stopLateHlsWriterAndCleanupArtifacts(finalization, () =>
-                        this.processManager.stopHls(result.handle),
-                    );
-                    return;
-                }
-                this.activeHlsWriterFinalizations.add(finalization);
-                this.completeHlsWriterStart(finalization);
-                this.streamProcess = result.child;
-                this.hlsWriterHandle = result.handle;
-            } else {
-                const result = await this.processManager.createManaged(poption);
-                this.observeManagedProcessTerminal(result.child);
-                if (
-                    this.stoppedProcessStartGenerations.has(processStartGeneration) ||
-                    this.processStartGeneration !== processStartGeneration
-                ) {
-                    await this.processManager.requestStop(result.handle);
-                    return;
-                }
-                this.streamProcess = result.child;
-                this.streamProcessHandle = result.handle;
-            }
-        } catch (err: any) {
-            if (hlsStopFinalization !== null) {
-                this.completeHlsWriterStart(hlsStopFinalization);
-            }
-            if (
-                this.stoppedProcessStartGenerations.has(processStartGeneration) ||
-                this.processStartGeneration !== processStartGeneration
-            ) {
-                throw err;
-            }
-
-            this.log.stream.error(createEncodeProcessFailureLogMessage(poption.cmd));
-            await this.stop();
-        } finally {
-            this.finishProcessStartGeneration(processStartGeneration);
-        }
-        if (this.streamProcess === null) {
+        if (
+            this.streamProcess === null ||
+            (writerStarted &&
+                (ProcessUtil.isExited(this.streamProcess) ||
+                    this.streamProcess.signalCode != null ||
+                    this.streamProcess.stdin === null ||
+                    this.streamProcess.stdin.destroyed))
+        ) {
             throw new Error('CreateStreamProcessError');
         }
 
@@ -237,13 +271,14 @@ export default abstract class RecordedStreamBaseModel
         this.setStopTimer();
 
         // ffmpeg debug 用ログ出力
-        if (this.streamProcess.stderr !== null) {
+        if (this.getStreamType() !== 'RecordedHLS' && this.streamProcess.stderr !== null) {
             this.streamProcess.stderr.on('data', data => {
                 this.log.stream.debug(String(data));
             });
         }
 
         // パイプ処理
+        this.detachEarlyWriterTerminal?.();
         const inputReader = this.sourceReader?.readable ?? this.fileStream;
         if (this.streamProcess.stdin !== null && inputReader !== null) {
             // ts が入力かつ、HLS 配信の場合は arib-subtitle-timedmetadater を通す
@@ -261,6 +296,40 @@ export default abstract class RecordedStreamBaseModel
         if (ProcessUtil.isExited(this.streamProcess) === true) {
             this.streamProcess.removeAllListeners();
             this.emitExitStream();
+        }
+    }
+
+    private async startStreamProcess(
+        streamId: apid.StreamId,
+        finalization: HlsStopFinalization | null,
+        generation: object,
+    ): Promise<void> {
+        const option = await this.createProcessOption(streamId);
+        if (!this.isCurrentStart(generation)) return;
+
+        this.log.stream.info(createEncodeProcessLogMessage(option.cmd));
+        try {
+            if (finalization !== null) {
+                await this.startHlsWriter(option, finalization, generation);
+                return;
+            }
+
+            this.pendingProcessStartGenerations.add(generation);
+            const result = await this.processManager.createManaged(option);
+            this.observeManagedProcessTerminal(result.child);
+            if (!this.isCurrentStart(generation)) {
+                await this.processManager.requestStop(result.handle);
+                return;
+            }
+            this.streamProcess = result.child;
+            this.streamProcessHandle = result.handle;
+        } catch (error: unknown) {
+            if (!this.isCurrentStart(generation)) throw error;
+            this.log.stream.error(createEncodeProcessFailureLogMessage(option.cmd));
+            await this.stop();
+            throw new Error('CreateStreamProcessError', { cause: error });
+        } finally {
+            this.finishProcessStartGeneration(generation);
         }
     }
 
@@ -347,9 +416,27 @@ export default abstract class RecordedStreamBaseModel
             throw new Error('SetVideoFileInfoError');
         }
 
+        const input =
+            this.playbackSource === null
+                ? this.isRecording === true
+                    ? null
+                    : this.videoFilePath
+                : this.playbackSource.processInput;
+        return this.buildProcessOption(streamId, input, this.videoFileType);
+    }
+
+    private buildProcessOption(
+        streamId: apid.StreamId,
+        input: string | null,
+        videoFileType: apid.VideoFileType,
+    ): CreateProcessOption {
+        if (this.processOption === null) {
+            throw new Error('ProcessOptionIsNull');
+        }
+
         let cmd = this.processOption.cmd
             .replace(/%FFMPEG%/g, this.config.ffmpeg)
-            .replace(/%SS%/g, this.videoFileType === 'ts' ? '' : this.processOption.playPosition.toString(10));
+            .replace(/%SS%/g, videoFileType === 'ts' ? '' : this.processOption.playPosition.toString(10));
 
         if (this.getStreamType() === 'RecordedHLS') {
             cmd = cmd
@@ -358,12 +445,7 @@ export default abstract class RecordedStreamBaseModel
         }
 
         const option: CreateProcessOption = {
-            input:
-                this.playbackSource === null
-                    ? this.isRecording === true
-                        ? null
-                        : this.videoFilePath
-                    : this.playbackSource.processInput,
+            input,
             output:
                 this.getStreamType() === 'RecordedHLS'
                     ? `${this.config.streamFilePath}\/stream${streamId.toString(10)}.m3u8`
@@ -461,6 +543,7 @@ export default abstract class RecordedStreamBaseModel
         if (processStartGeneration !== undefined) {
             this.stoppedProcessStartGenerations.add(processStartGeneration);
         }
+        this.detachEarlyWriterTerminal?.();
         this.deferPlaybackSourceRelease();
         const streamProcessHandle = this.streamProcessHandle;
         const hlsWriterHandle = this.hlsWriterHandle;

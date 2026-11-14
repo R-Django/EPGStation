@@ -273,6 +273,15 @@ bundleへ採用してcloseする。配信機能はprovider失敗時にDB、path�
 採用後のRecorded Stream consumerはsourceの`playPosition`だけを再生位置選択、再生時間確認、および`%SS%`置換へ渡す。
 再生位置をDB、実path、動画情報から再解決するconsumer側fallbackは持たない。
 
+録画完了済みTSを0秒より後からHLSへ変換する場合、providerが実pathを確定した通知を、開始coordinatorがwriterの先行起動に
+使う。対象コマンドは`%FFMPEG%`を含み、唯一の入力が`-i pipe:0`で、`%INPUT%`を使わないものとする。coordinatorは出力先
+を準備してwriterを起動し、入力検証とreader取得の完了後に既存の字幕処理経由でstdinへ接続する。
+
+先行起動に失敗した場合やwriterが入力接続前に終了した場合は、入力準備を待たずに開始結果を失敗させる。終了監視は入力接続
+または停止時に解除する。未接続のreaderとleaseは取得時に開始coordinatorの回収
+経路へ登録し、接続後はstreamが所有する。停止や期限超過が先着した場合は未接続の入力をwriterの停止待ちより先に回収し、
+遅れて届いた入力も接続せずに回収する。
+
 録画済み番組管理機能によるsource解決と必要な変換の確立は、一件の30秒開始期限で監督する。期限は入力検証後からHTTP本文へ接
 続できる状態、またはopaque handleを保存してfile readerをHLS writerのstdinへ接続するまでを覆い、配信本文の寿命、HLS準備確
 認、録画中fileの追尾には適用しない。期限後に完了したprovider結果や開始結果は応答へ採用せず、遅れて得たfile readerまたは

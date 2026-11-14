@@ -116,4 +116,6 @@ export default interface IRecordedPlaybackSourceProvider {
 export interface RecordedPlaybackOpenOption {
     /** 動画情報（ffprobe）の取得失敗を許し、`NaN`の動画情報で続けるか。 */
     readonly allowMissingVideoInfo?: boolean;
+    /** 完了済みTSのパスを解決した時点で、動画情報の取得前に通知する。 */
+    readonly onCompletedTsResolved?: () => void;
 }

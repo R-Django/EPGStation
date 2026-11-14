@@ -36,11 +36,11 @@ const RecordedPlaybackSourceProvider = (
                 videoFileId: number,
                 expectedRecordedId: number,
                 playPosition: number,
+                option?: { onCompletedTsResolved: () => void },
             ): Promise<{
                 readonly state: string;
                 adopt():
-                    | { readonly status: 'adopted'; readonly source: Record<string, any> }
-                    | { readonly status: 'stale' };
+                    { readonly status: 'adopted'; readonly source: Record<string, any> } | { readonly status: 'stale' };
                 disposeBeforeAdoption(): Promise<void>;
             }>;
             resolveRecordedId(videoFileId: number): Promise<number>;
@@ -162,7 +162,9 @@ describe('recorded playback source provider integration', () => {
             readerFactory,
         );
 
-        const tail = await provider.open(302, 91, 1.5);
+        const onCompletedTsResolved = vi.fn();
+        const tail = await provider.open(302, 91, 1.5, { onCompletedTsResolved });
+        expect(onCompletedTsResolved).not.toHaveBeenCalled();
         const disposal = tail.disposeBeforeAdoption();
         expect(tail.adopt()).toEqual({ status: 'stale' });
         await disposal;
@@ -172,7 +174,8 @@ describe('recorded playback source provider integration', () => {
         expect(readerFactory.openRecordingTail).toHaveBeenCalledWith(inputPath, 12);
 
         recorded.isRecording = false;
-        const completed = await provider.open(302, 91, 1.5);
+        const completed = await provider.open(302, 91, 1.5, { onCompletedTsResolved });
+        expect(onCompletedTsResolved).toHaveBeenCalledOnce();
         expect(completed.adopt()).toEqual({
             source: expect.objectContaining({
                 inputPath,

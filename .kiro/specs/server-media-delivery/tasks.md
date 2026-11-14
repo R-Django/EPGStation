@@ -42,6 +42,13 @@ foundation、設定既定値、tuner stream 取得、録画 file/domain 解決�
 | 8.7  | `test/server/media-delivery/media-delivery-http.integration.test.ts`<br>`test/server/media-delivery/media-delivery-filesystem.integration.test.ts`<br>`test/server/media-delivery/media-delivery-process.integration.test.ts`<br>`test/server/media-delivery/media-delivery-tuner.integration.test.ts`<br>`test/server/media-delivery/media-delivery-recorded-content.integration.test.ts`                                                                                                                | `integration`                                      | `8.2, 8.6`                                                                                      | `npm run test:server:integration -- test/server/media-delivery/media-delivery-http.integration.test.ts` <br>`npm run test:server:integration -- test/server/media-delivery/media-delivery-filesystem.integration.test.ts`<br>`npm run test:server:integration -- test/server/media-delivery/media-delivery-process.integration.test.ts`<br>`npm run test:server:integration -- test/server/media-delivery/media-delivery-tuner.integration.test.ts`<br>`npm run test:server:integration -- test/server/media-delivery/media-delivery-recorded-content.integration.test.ts`                                                                                                                                                                        |
 | 8.8  | `test/server/media-delivery/live-delivery.test.ts`<br>`test/server/media-delivery/media-delivery-http.integration.test.ts` | `unittest/spec`・`unittest/imp`・`integration` | `2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 4.1, 5.1, 5.2, 5.3, 5.4, 6.1, 7.1, 8.4, 8.5, 8.6, 8.7` | `npm run test:server:imp -- test/server/media-delivery/live-delivery.test.ts`<br>`npm run test:server:integration -- test/server/media-delivery/media-delivery-http.integration.test.ts` |
 
+Requirement 9.9と9.10のテスト対応は次のとおり。
+
+- 対象プリセットでの先行起動と入力接続は `test/server/media-delivery/media-delivery-recorded-content.integration.test.ts` の実processテストと
+  `test/server/media-delivery/recordedstreambasemodel-process-wiring.imp.test.ts` の配線テストで確認する。
+- writer起動失敗・停止・開始期限超過・遅延入力の回収は
+  `test/server/media-delivery/streammanagemodel-recorded-start-settlement.imp.test.ts` で確認する。
+
 -   [x] 1. 配信・公開契約を characterization する
 -   [x] 1.1 ライブ直接配信と視聴用変換の契約を固定する
 

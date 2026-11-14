@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import type { ReadStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
+import { createSyntheticMedia, FFMPEG } from '../harness/synthetic-media';
 import { baseConfig, compiled, deferred, executionManager, fakeChild, fakeStream, logger } from './_media-harness';
 
 const StreamApiModel = compiled<any>('model', 'api', 'stream', 'StreamApiModel.js').default;
@@ -24,8 +26,181 @@ const RecordedDeliveryLeaseConsumer = compiled<any>(
 ).default;
 const StreamManageModel = compiled<any>('model', 'service', 'stream', 'manager', 'StreamManageModel.js').default;
 const VideoApiModel = compiled<any>('model', 'api', 'video', 'VideoApiModel.js').default;
+const EncodeProcessManageModel = compiled<any>('model', 'service', 'encode', 'EncodeProcessManageModel.js').default;
+const HLSFileDeleterModel = compiled<any>('model', 'service', 'stream', 'util', 'HLSFileDeleterModel.js').default;
 
 describe('recorded content boundary', () => {
+    it.each(['connects input', 'fails before input'] as const)(
+        '[MD-9.9][MD-9.10] starts a real prefixed writer before the input probe and %s',
+        async outcome => {
+            const dir = mkdtempSync(join(tmpdir(), 'epg-real-recorded-early-'));
+            const output = join(dir, 'stream');
+            const probe = deferred<{ bitRate: number; duration: number; size: number }>();
+            let cleanup: (() => Promise<void>) | undefined;
+            const info = { bitRate: 1504, duration: 60, size: 0 };
+            try {
+                mkdirSync(output);
+                const source = await createSyntheticMedia(dir, 'synthetic.ts', 'mpegts');
+                const ffmpeg = outcome === 'connects input' ? FFMPEG : join(dir, 'synthetic-missing-ffmpeg');
+                const config = baseConfig({ ffmpeg, streamFilePath: output });
+                config.stream.recorded.ts.hls[0].cmd =
+                    '/bin/nice -n 2 %FFMPEG% -i pipe:0 -c copy -f hls ' +
+                    '-hls_segment_filename %streamFileDir%/stream%streamNum%-%d.ts %streamFileDir%/stream%streamNum%.m3u8';
+                const configuration = { getConfig: () => config };
+                const logs = { getLogger: logger };
+                const socketIO = { notifyClient: vi.fn() };
+                const videoFileDB = { findId: vi.fn(async () => ({ id: 31, recordedId: 41, type: 'ts' })) };
+                const recordedDB = { findId: vi.fn(async () => ({ id: 41, isRecording: false })) };
+                const videoUtil = { getFullFilePathFromVideoFile: () => source, getInfo: () => probe.promise };
+                const release = vi.fn(async () => undefined);
+                const provider = new RecordedPlaybackSourceProvider(videoFileDB, recordedDB, videoUtil);
+                const consumer = new RecordedDeliveryLeaseConsumer(provider, { acquire: async () => ({ release }) });
+                const acquireAndOpen = vi.spyOn(consumer, 'acquireAndOpen');
+                const processManager = new EncodeProcessManageModel(logs, configuration);
+                const createWriter = vi.spyOn(processManager, 'createHlsWriter');
+                const stream = new RecordedHLSStreamModel(
+                    configuration,
+                    logs,
+                    processManager,
+                    new HLSFileDeleterModel(logs),
+                    socketIO,
+                    {},
+                    {},
+                    {},
+                );
+                const adopt = vi.spyOn(stream, 'adoptPlaybackSource');
+                const manager = new StreamManageModel(logs, executionManager(), socketIO, undefined, consumer);
+                const api = new StreamApiModel(
+                    configuration,
+                    async () => fakeStream(),
+                    async () => fakeStream(),
+                    async () => fakeStream(),
+                    async () => stream,
+                    manager,
+                    {},
+                    {},
+                    {},
+                    {},
+                    {},
+                    consumer,
+                );
+                cleanup = async () => {
+                    await manager.stopAll();
+                    await Promise.allSettled(acquireAndOpen.mock.results.map(result => result.value));
+                };
+                let result: { streamId: number } | Error | undefined;
+                const starting = api.startRecordedHLSStream({ mode: 0, playPosition: 1, videoFileId: 31 });
+                void starting.then(
+                    (id: number) => {
+                        result = { streamId: id };
+                    },
+                    (error: Error) => {
+                        result = error;
+                    },
+                );
+
+                await vi.waitFor(() => expect(createWriter).toHaveBeenCalledOnce(), { timeout: 5000 });
+                const { child } = await createWriter.mock.results[0].value;
+                expect(adopt).not.toHaveBeenCalled();
+                if (outcome === 'fails before input') {
+                    await vi.waitFor(() => expect(result).toMatchObject({ message: 'CreateStreamProcessError' }), {
+                        timeout: 5000,
+                    });
+                    expect(child.exitCode).toBe(127);
+                    probe.resolve(info);
+                    await Promise.allSettled(acquireAndOpen.mock.results.map(entry => entry.value));
+                    expect(adopt).not.toHaveBeenCalled();
+                } else {
+                    expect(result).toBeUndefined();
+                    expect(readdirSync(output)).toEqual([]);
+                    probe.resolve(info);
+                    const streamId = await starting;
+                    const reader = (adopt.mock.calls[0][0] as { reader: { readable: ReadStream } }).reader.readable;
+                    expect(reader.start).toBe(188);
+                    await vi.waitFor(
+                        () => {
+                            const playlist = readFileSync(join(output, `stream${streamId}.m3u8`), 'utf8');
+                            expect(playlist).toContain('#EXTINF');
+                        },
+                        { timeout: 5000 },
+                    );
+                    await manager.stop(streamId);
+                    expect(reader.closed).toBe(true);
+                }
+                await vi.waitFor(
+                    () => {
+                        expect(release).toHaveBeenCalledOnce();
+                        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+                        expect(readdirSync(output)).toEqual([]);
+                    },
+                    { timeout: 5000 },
+                );
+            } finally {
+                probe.resolve(info);
+                await cleanup?.();
+                rmSync(dir, { force: true, recursive: true });
+            }
+        },
+        20000,
+    );
+
+    it('starts the HLS writer early when a pipe preset contains %FFMPEG% after a command prefix', async () => {
+        const cmd = '/bin/nice -n 2 %FFMPEG% -i pipe:0 -f hls output.m3u8';
+        const config = baseConfig();
+        config.stream.recorded.ts.hls[0].cmd = cmd;
+        const opened = deferred<any>();
+        const consumer = {
+            acquireAndOpen: vi.fn((_id, _position, _active, option) => {
+                option.onCompletedTsResolved();
+                return opened.promise;
+            }),
+        };
+        const writer = vi.fn(async () => undefined);
+        const stream = Object.assign(fakeStream({ type: 'RecordedHLS' }), { startHlsWriterEarly: writer });
+        const manager = new StreamManageModel(
+            { getLogger: logger },
+            executionManager(),
+            { notifyClient: vi.fn() },
+            undefined,
+            consumer,
+        );
+        const api = new StreamApiModel(
+            { getConfig: () => config },
+            async () => fakeStream(),
+            async () => fakeStream(),
+            async () => fakeStream(),
+            async () => stream,
+            manager,
+            {},
+            {},
+            {},
+            {},
+            {},
+            consumer,
+        );
+        const starting = api.startRecordedHLSStream({ mode: 0, playPosition: 10, videoFileId: 31 });
+
+        await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce());
+        expect(stream.setOption).toHaveBeenCalledWith({ cmd, playPosition: 10, videoFileId: 31 }, 0);
+        expect(stream.adoptPlaybackSource).not.toHaveBeenCalled();
+
+        const release = vi.fn(async () => undefined);
+        opened.resolve({
+            release,
+            source: {
+                inputPath: 'synthetic/recorded.ts',
+                kind: 'completed-file-reader',
+                playPosition: 10,
+                recordedId: 41,
+                videoFileId: 31,
+                videoInfo: { bitRate: 8, duration: 60, size: 480 },
+            },
+        });
+        const streamId = await starting;
+        expect(stream.adoptPlaybackSource).toHaveBeenCalledOnce();
+        await manager.stop(streamId);
+    });
+
     it('[MD-2.2][MD-2.8] selects encoded configuration and rejects a missing video file', async () => {
         const stream = fakeStream({ type: 'RecordedStream' });
         const deliveryConsumer = {

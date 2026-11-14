@@ -267,20 +267,39 @@ export default class StreamApiModel implements IStreamApiModel {
         option: apid.RecordedStreanOption,
         streamProvider: () => Promise<IRecordedStreamBaseModel>,
     ): Promise<{ readonly stream: IRecordedStreamBaseModel; readonly streamId: apid.StreamId }> {
+        const setStreamCommand = (
+            stream: IRecordedStreamBaseModel,
+            cmd: string,
+            playPosition: number,
+            videoFileId: number,
+        ): void => {
+            stream.setOption({ cmd, playPosition, videoFileId }, option.mode);
+        };
         return await this.streamManageModel.startRecorded(
             streamProvider,
             {
                 configure: (stream, source) => {
                     const config = this.getRecordedVideoConfig(type, option.mode, source.kind === 'encoded-direct');
-                    stream.setOption(
-                        {
-                            cmd: config.cmd,
-                            playPosition: source.playPosition,
-                            videoFileId: source.videoFileId,
-                        },
-                        option.mode,
-                    );
+                    setStreamCommand(stream, config.cmd, source.playPosition, source.videoFileId);
                 },
+                ...(type === 'hls' && option.playPosition > 0
+                    ? {
+                          configureEarlyHls: (stream: IRecordedStreamBaseModel): boolean => {
+                              const { cmd } = this.getRecordedVideoConfig('hls', option.mode, false);
+                              const inputs = [...cmd.matchAll(/(?:^| )-i +([^ ]+)/g)];
+                              if (
+                                  !cmd.includes('%FFMPEG%') ||
+                                  inputs.length !== 1 ||
+                                  inputs[0][1] !== 'pipe:0' ||
+                                  cmd.includes('%INPUT%')
+                              ) {
+                                  return false;
+                              }
+                              setStreamCommand(stream, cmd, option.playPosition, option.videoFileId);
+                              return true;
+                          },
+                      }
+                    : {}),
                 mode: option.mode,
                 pendingInfoType: type === 'hls' ? 'RecordedHLS' : 'RecordedStream',
                 playPosition: option.playPosition,

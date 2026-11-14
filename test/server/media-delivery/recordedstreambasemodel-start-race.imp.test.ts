@@ -135,6 +135,62 @@ describe('RecordedStreamBaseModel start races and process failures (unittest/imp
         expect(log.stream.error).toHaveBeenCalledWith(expect.stringContaining('create encode process failed:'));
     });
 
+    it('skips the early HLS writer after a stop during directory preparation', async () => {
+        const { model, processManager } = makeSubject({ hls: true });
+        const directory = deferred<void>();
+        const prepare = vi.spyOn(model, 'prepStreamDir').mockReturnValue(directory.promise);
+        const starting = model.startHlsWriterEarly(6, vi.fn());
+
+        expect(prepare).toHaveBeenCalledExactlyOnceWith(6);
+        await model.stop();
+        directory.resolve();
+
+        await expect(starting).resolves.toBeUndefined();
+        expect(processManager.createHlsWriter).not.toHaveBeenCalled();
+    });
+
+    it('stops an early HLS writer that was created after the stream stopped', async () => {
+        const { model, processManager } = makeSubject({ hls: true });
+        const writer = deferred<{ child: unknown; handle: unknown }>();
+        const handle = Object.freeze({ kind: 'late-early-hls-writer' });
+        processManager.createHlsWriter.mockReturnValue(writer.promise);
+        const starting = model.startHlsWriterEarly(6, vi.fn());
+        await vi.waitFor(() => expect(processManager.createHlsWriter).toHaveBeenCalledOnce());
+
+        const stopping = model.stop();
+        writer.resolve({ child: fakeChild(), handle });
+        await Promise.all([starting, stopping]);
+
+        expect(processManager.stopHls).toHaveBeenCalledExactlyOnceWith(handle);
+        expect(() => model.getStream()).toThrow('StreamIsNull');
+    });
+
+    it('reports an early HLS writer creation failure with its cause', async () => {
+        const { log, model, processManager } = makeSubject({ hls: true });
+        const failure = new Error('synthetic early HLS writer failure');
+        processManager.createHlsWriter.mockRejectedValue(failure);
+
+        await expect(model.startHlsWriterEarly(6, vi.fn())).rejects.toMatchObject({
+            message: 'CreateStreamProcessError',
+            cause: failure,
+        });
+        expect(log.stream.error).toHaveBeenCalledWith(expect.stringContaining('create encode process failed:'));
+    });
+
+    it('does not create a process when a stop wins over recorded file information', async () => {
+        const { model, processManager } = makeSubject();
+        const videoInfo = deferred<void>();
+        const pending = vi.spyOn(model, 'setVideFileInfo').mockReturnValue(videoInfo.promise);
+        const starting = model.start(0);
+
+        expect(pending).toHaveBeenCalledOnce();
+        await model.stop();
+        videoInfo.resolve();
+
+        await expect(starting).resolves.toBeUndefined();
+        expect(processManager.createManaged).not.toHaveBeenCalled();
+    });
+
     it('[MD-10.2] exposes the process stdout through getStream once the process has started', async () => {
         vi.useFakeTimers();
         const child = fakeChild();
