@@ -254,6 +254,69 @@ describe('StreamManageModel recorded start settlement (unittest/imp)', () => {
         },
     );
 
+    it.each(['source resolution', 'stream provider', 'transition turn'] as const)(
+        'does not create an early HLS writer after a stop during %s',
+        async stage => {
+            const opened = deferred<ReturnType<typeof makeDelivery>>();
+            const provider = deferred<ReturnType<typeof fakeStream>>();
+            const turn = deferred<number>();
+            const stream = fakeStream({ type: 'RecordedHLS' });
+            const startHlsWriterEarly = vi.fn(async () => undefined);
+            Object.assign(stream, { startHlsWriterEarly });
+            const streamProvider = vi.fn(() => provider.promise);
+            const execution = executionManager();
+            execution.getExecution.mockImplementation(async (priority?: number) => (priority === 1 ? turn.promise : 2));
+            let onCompletedTsResolved: () => void = () => {
+                throw new Error('Source request did not start');
+            };
+            const consumer = {
+                acquireAndOpen: vi.fn(async (_id, _position, _active, options) => {
+                    onCompletedTsResolved = options.onCompletedTsResolved;
+                    return opened.promise;
+                }),
+            };
+            const manager = new StreamManageModel(
+                { getLogger: logger },
+                execution,
+                { notifyClient: vi.fn() },
+                undefined,
+                consumer,
+            );
+            const starting = manager.startRecorded(
+                streamProvider,
+                recordedStartOption({
+                    configureEarlyHls: vi.fn(() => true),
+                    pendingInfoType: 'RecordedHLS',
+                    playPosition: 10,
+                    usesManagedId: true,
+                }),
+            );
+            const stopped = expect(starting).rejects.toThrow('StreamStartStopped');
+            await vi.waitFor(() => expect(consumer.acquireAndOpen).toHaveBeenCalledOnce());
+            if (stage !== 'source resolution') {
+                onCompletedTsResolved();
+                expect(streamProvider).toHaveBeenCalledOnce();
+            }
+            if (stage === 'transition turn') {
+                provider.resolve(stream);
+                await vi.waitFor(() => expect(execution.getExecution).toHaveBeenCalledWith(1));
+            }
+
+            await manager.stopAll();
+            await stopped;
+            if (stage === 'source resolution') onCompletedTsResolved();
+            const delivery = makeDelivery();
+            provider.resolve(stream);
+            turn.resolve(1);
+            opened.resolve(delivery);
+            await vi.waitFor(() => expect(delivery.release).toHaveBeenCalledOnce());
+
+            expect(streamProvider).toHaveBeenCalledTimes(stage === 'source resolution' ? 0 : 1);
+            expect(startHlsWriterEarly).not.toHaveBeenCalled();
+            expect(stream.start).not.toHaveBeenCalled();
+        },
+    );
+
     it('[MD-10.2] acquireRecordedDelivery releases the delivery and rejects StreamStartStopped when the caller became inactive', async () => {
         const delivery = makeDelivery();
         let active = true;

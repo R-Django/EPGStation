@@ -147,6 +147,66 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         expect(transform._readableState.pipes).toContain(child.stdin);
     });
 
+    it.each(['exit', 'close', 'error'] as const)(
+        'reports an early HLS writer %s once before connecting input',
+        async event => {
+            const { child, model } = makeSubject({ hls: true });
+            const onTerminal = vi.fn();
+
+            await model.startHlsWriterEarly(3, onTerminal);
+            expect(onTerminal).not.toHaveBeenCalled();
+            child.emit(event, new Error('synthetic writer failure'));
+            child.emit('close');
+
+            expect(onTerminal).toHaveBeenCalledExactlyOnceWith(new Error('CreateStreamProcessError'));
+            for (const name of ['exit', 'close', 'error']) {
+                expect(child.listenerCount(name)).toBe(0);
+            }
+        },
+    );
+
+    it.each([{ exitCode: 1 }, { signalCode: 'SIGTERM' }])(
+        'reports an early HLS writer that has already terminated (%j)',
+        async terminalStatus => {
+            const child = Object.assign(fakeChild(), terminalStatus);
+            const { model } = makeSubject({ hls: true, child });
+            const onTerminal = vi.fn();
+
+            await model.startHlsWriterEarly(3, onTerminal);
+
+            expect(onTerminal).toHaveBeenCalledExactlyOnceWith(new Error('CreateStreamProcessError'));
+            expect(child.listenerCount('close')).toBe(0);
+        },
+    );
+
+    it('logs an early HLS writer stdin error and stderr output before connecting input', async () => {
+        const { child, log, model } = makeSubject({ hls: true });
+        const failure = new Error('synthetic writer stdin error');
+
+        await model.startHlsWriterEarly(3, vi.fn());
+        child.stdin.emit('error', failure);
+        child.stderr.write('synthetic writer stderr');
+
+        expect(log.stream.error).toHaveBeenCalledWith('stream process stdin error');
+        expect(log.stream.error).toHaveBeenCalledWith(failure);
+        expect(log.stream.debug).toHaveBeenCalledWith('synthetic writer stderr');
+    });
+
+    it('rejects input connection if the early HLS writer has lost stdin', async () => {
+        const { child, model } = makeSubject({ hls: true });
+        const readable = new PassThrough();
+        const pipe = vi.spyOn(readable, 'pipe');
+        await model.startHlsWriterEarly(3, vi.fn());
+        child.stdin.destroy();
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
+
+        await expect(model.start(3)).rejects.toThrow('CreateStreamProcessError');
+        expect(pipe).not.toHaveBeenCalled();
+    });
+
     it('[MD-10.2] starts without piping when the process has no stdin, and without reading stderr when it has none', async () => {
         const child = fakeChild();
         child.stdin = null;
