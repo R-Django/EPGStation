@@ -33,6 +33,8 @@ export interface VideoFileInfo {
  */
 export default interface IRecordedStreamBaseModel extends IStreamBaseModel<RecordedStreamOption> {
     setOption(option: RecordedStreamOption, mode: number): void;
+    /** 録画HLSのwriterを標準入力待ちで起動する。入力の接続は start() が行う。 */
+    startHlsWriterEarly?(streamId: apid.StreamId): Promise<void>;
     /**
      * 配信元データを設定する。専用の解放処理を持たない呼び出し元向けの簡易版で、
      * 内部的には no-op の release を渡した `adoptPlaybackSource` と同じ。

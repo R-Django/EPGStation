@@ -266,6 +266,10 @@ export default class RecordedPlaybackSourceProvider implements IRecordedPlayback
             throw new Error('RecordedPlaybackPathNotFound');
         }
 
+        if (videoFile.type === 'ts' && recorded.isRecording === false) {
+            option?.onCompletedTsResolved?.();
+        }
+
         let videoInfo: VideoInfo;
         try {
             videoInfo = await this.videoUtil.getInfo(inputPath);

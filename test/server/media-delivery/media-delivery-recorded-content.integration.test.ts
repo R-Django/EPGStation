@@ -26,6 +26,63 @@ const StreamManageModel = compiled<any>('model', 'service', 'stream', 'manager',
 const VideoApiModel = compiled<any>('model', 'api', 'video', 'VideoApiModel.js').default;
 
 describe('recorded content boundary', () => {
+    it('starts the HLS writer early when a pipe preset contains %FFMPEG% after a command prefix', async () => {
+        const cmd = '/bin/nice -n 2 %FFMPEG% -i pipe:0 -f hls output.m3u8';
+        const config = baseConfig();
+        config.stream.recorded.ts.hls[0].cmd = cmd;
+        const opened = deferred<any>();
+        const consumer = {
+            acquireAndOpen: vi.fn((_id, _position, _active, option) => {
+                option.onCompletedTsResolved();
+                return opened.promise;
+            }),
+        };
+        const writer = vi.fn(async () => undefined);
+        const stream = Object.assign(fakeStream({ type: 'RecordedHLS' }), { startHlsWriterEarly: writer });
+        const manager = new StreamManageModel(
+            { getLogger: logger },
+            executionManager(),
+            { notifyClient: vi.fn() },
+            undefined,
+            consumer,
+        );
+        const api = new StreamApiModel(
+            { getConfig: () => config },
+            async () => fakeStream(),
+            async () => fakeStream(),
+            async () => fakeStream(),
+            async () => stream,
+            manager,
+            {},
+            {},
+            {},
+            {},
+            {},
+            consumer,
+        );
+        const starting = api.startRecordedHLSStream({ mode: 0, playPosition: 10, videoFileId: 31 });
+
+        await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce());
+        expect(stream.setOption).toHaveBeenCalledWith({ cmd, playPosition: 10, videoFileId: 31 }, 0);
+        expect(stream.adoptPlaybackSource).not.toHaveBeenCalled();
+
+        const release = vi.fn(async () => undefined);
+        opened.resolve({
+            release,
+            source: {
+                inputPath: 'synthetic/recorded.ts',
+                kind: 'completed-file-reader',
+                playPosition: 10,
+                recordedId: 41,
+                videoFileId: 31,
+                videoInfo: { bitRate: 8, duration: 60, size: 480 },
+            },
+        });
+        const streamId = await starting;
+        expect(stream.adoptPlaybackSource).toHaveBeenCalledOnce();
+        await manager.stop(streamId);
+    });
+
     it('[MD-2.2][MD-2.8] selects encoded configuration and rejects a missing video file', async () => {
         const stream = fakeStream({ type: 'RecordedStream' });
         const deliveryConsumer = {

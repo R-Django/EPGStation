@@ -46,6 +46,7 @@ interface ActiveStream {
     /** この配信のために確保された資源（stream 停止処理等）の集合。停止時にまとめて解放する。 */
     readonly resources: ResourceLeaseBundle;
     readonly startResult: StartResult;
+    startTransition: Promise<void> | null;
     stream: IStreamBaseModel<any> | null;
     /** `stopActive`が返す Promise のキャッシュ。同一配信への複数回の停止要求を1回にまとめる。 */
     finalizePromise: Promise<void> | null;
@@ -208,35 +209,80 @@ class StreamManageModel implements IStreamManageModel {
             null,
             option.usesManagedId,
             async active => {
-                let delivery: AcquiredRecordedDeliverySource | null = null;
+                let pendingDelivery: AcquiredRecordedDeliverySource | null = null;
+                let pendingRelease: Promise<void> | undefined;
+                const releasePendingDelivery = (): Promise<void> | undefined => {
+                    if (pendingDelivery !== null) {
+                        const delivery = pendingDelivery;
+                        pendingDelivery = null;
+                        pendingRelease = this.releaseUnadoptedRecordedDeliveryAfterFailure(delivery, active.id);
+                    }
+                    return pendingRelease;
+                };
+                // writer の停止を待つ前に、まだ接続されていない入力を解放する。
+                active.resources.adopt(releasePendingDelivery);
                 let adopted = false;
                 let stream: IRecordedStreamBaseModel | null = null;
                 try {
-                    delivery = await consumer.acquireAndOpen(option.videoFileId, option.playPosition, () =>
-                        this.canSettleStart(active),
-                    );
-                    if (this.canSettleStart(active) === false) {
+                    const isActive = () => this.canSettleStart(active);
+                    const configureEarlyHls = option.configureEarlyHls;
+                    let earlyStart: Promise<void> | undefined;
+                    const onCompletedTsResolved = () => {
+                        if (configureEarlyHls === undefined || !isActive()) return;
+                        earlyStart = (async () => {
+                            const candidate = await streamProvider();
+                            if (!isActive()) return;
+                            stream = candidate;
+                            if (!candidate.startHlsWriterEarly || !configureEarlyHls(candidate)) return;
+
+                            await this.prepareStartTransition(active);
+                            if (!isActive()) return;
+
+                            this.attachStream(active, candidate);
+                            await candidate.startHlsWriterEarly(active.id);
+                        })();
+                        void earlyStart.catch((error: unknown) => {
+                            if (isActive()) {
+                                this.logStreamError('start stream error');
+                                this.logStreamError(error);
+                                this.rejectStart(active, active.mapStartError(error), 'start-failed');
+                            }
+                        });
+                    };
+                    const delivery =
+                        configureEarlyHls === undefined
+                            ? await consumer.acquireAndOpen(option.videoFileId, option.playPosition, isActive)
+                            : await consumer.acquireAndOpen(option.videoFileId, option.playPosition, isActive, {
+                                  onCompletedTsResolved,
+                              });
+                    if (!isActive()) {
                         await this.releaseUnadoptedRecordedDeliveryAfterFailure(delivery, active.id);
                         return;
                     }
+                    pendingDelivery = delivery;
 
-                    stream = await streamProvider();
+                    await earlyStart;
+                    if (!isActive()) return;
+
+                    stream ??= await streamProvider();
                     if (this.canSettleStart(active) === false) {
                         await this.cleanupLateStreamCandidate(stream, active.id);
-                        await this.releaseUnadoptedRecordedDeliveryAfterFailure(delivery, active.id);
                         return;
                     }
 
-                    stream.adoptPlaybackSource(delivery.source, () => delivery!.release());
+                    stream.adoptPlaybackSource(delivery.source, () => delivery.release());
+                    pendingDelivery = null;
                     adopted = true;
-                    option.configure(stream, delivery.source);
-                    this.attachStream(active, stream);
+                    if (active.stream === null) {
+                        option.configure(stream, delivery.source);
+                        this.attachStream(active, stream);
+                    }
                     startedStream = stream;
                 } catch (error: unknown) {
                     if (stream !== null && adopted) {
                         await this.cleanupLateStreamCandidate(stream, active.id);
-                    } else if (delivery !== null) {
-                        await this.releaseUnadoptedRecordedDeliveryAfterFailure(delivery, active.id);
+                    } else {
+                        await releasePendingDelivery();
                     }
                     throw error;
                 }
@@ -461,6 +507,7 @@ class StreamManageModel implements IStreamManageModel {
             resources,
             startResult: { promise, reject, resolve, settled: false },
             startTimer: null,
+            startTransition: null,
             state: 'starting',
             stream,
             usesManagedId,
@@ -525,19 +572,7 @@ class StreamManageModel implements IStreamManageModel {
         }
 
         try {
-            await this.completeTransitionTurn(StreamManageModel.START_STREAM_PRIORITY);
-        } catch (error: unknown) {
-            this.log.stream.error('start stream error');
-            this.log.stream.error(error);
-            this.rejectStart(active, active.mapStartError(error), 'start-failed');
-            return;
-        }
-        if (this.canSettleStart(active) === false) {
-            return;
-        }
-
-        try {
-            await this.recheckManagedIdReservation(active);
+            await this.prepareStartTransition(active);
         } catch (error: unknown) {
             this.log.stream.error('start stream error');
             this.log.stream.error(error);
@@ -588,6 +623,17 @@ class StreamManageModel implements IStreamManageModel {
         }
 
         await this.cleanupLateStream(active);
+    }
+
+    /** writerが起動する前に一度だけ遷移順とHLS出力IDの衝突を確認する。 */
+    private prepareStartTransition(active: ActiveStream): Promise<void> {
+        active.startTransition ??= (async () => {
+            await this.completeTransitionTurn(StreamManageModel.START_STREAM_PRIORITY);
+            if (this.canSettleStart(active)) {
+                await this.recheckManagedIdReservation(active);
+            }
+        })();
+        return active.startTransition;
     }
 
     /** この開始要求がまだ「未確定・進行中・自分が current な active stream」であるかどうか。 */

@@ -118,6 +118,29 @@ describe('RecordedStreamBaseModel process wiring (unittest/imp)', () => {
         expect(transform._readableState.pipes).toContain(child.stdin);
     });
 
+    it('connects the completed recording to the already running HLS writer', async () => {
+        const { child, fileDeleter, model, processManager } = makeSubject({ hls: true });
+        const readable = new PassThrough();
+        const pipe = vi.spyOn(readable, 'pipe');
+
+        await model.startHlsWriterEarly(3);
+        expect(processManager.createHlsWriter).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ input: null, report: { kind: 'hls', streamId: 3 } }),
+        );
+        expect(pipe).not.toHaveBeenCalled();
+
+        model.adoptPlaybackSource(
+            readerSource({ close: vi.fn(async () => undefined), readable }),
+            async () => undefined,
+        );
+        await model.start(3);
+
+        expect(processManager.createHlsWriter).toHaveBeenCalledOnce();
+        expect(fileDeleter.deleteAllFiles).toHaveBeenCalledOnce();
+        const transform = pipe.mock.calls[0][0] as any;
+        expect(transform._readableState.pipes).toContain(child.stdin);
+    });
+
     it('[MD-10.2] starts without piping when the process has no stdin, and without reading stderr when it has none', async () => {
         const child = fakeChild();
         child.stdin = null;

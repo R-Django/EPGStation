@@ -115,6 +115,145 @@ describe('StreamManageModel recorded start settlement (unittest/imp)', () => {
         expect(delivery.release).not.toHaveBeenCalled();
     });
 
+    it.each(['success', 'probe failure', 'cancelled'])(
+        'starts the HLS writer before input settles and handles %s',
+        async outcome => {
+            const input = deferred<ReturnType<typeof makeDelivery>>();
+            const consumer = {
+                acquireAndOpen: vi.fn(
+                    (
+                        _id: number,
+                        _position: number,
+                        _active: () => boolean,
+                        option: { onCompletedTsResolved: () => void },
+                    ) => {
+                        option.onCompletedTsResolved();
+                        return input.promise;
+                    },
+                ),
+            };
+            const manager = makeManager(consumer);
+            const startHlsWriterEarly = vi.fn(async (_streamId: number) => undefined);
+            const stream = Object.assign(fakeStream({ type: 'RecordedHLS' }), { startHlsWriterEarly });
+            const option = recordedStartOption({
+                configureEarlyHls: vi.fn(() => true),
+                pendingInfoType: 'RecordedHLS',
+                playPosition: 10,
+                usesManagedId: true,
+            });
+            const starting = manager.startRecorded(async () => stream, option);
+            const settled = starting.catch(error => error);
+            await vi.waitFor(() => expect(stream.startHlsWriterEarly).toHaveBeenCalledOnce());
+            const [[streamId]] = startHlsWriterEarly.mock.calls;
+            expect(stream.adoptPlaybackSource).not.toHaveBeenCalled();
+            expect(stream.start).not.toHaveBeenCalled();
+
+            const delivery = makeDelivery();
+            if (outcome === 'success') {
+                input.resolve(delivery);
+                await expect(starting).resolves.toMatchObject({ stream, streamId });
+                expect(stream.adoptPlaybackSource).toHaveBeenCalledOnce();
+                expect(stream.start).toHaveBeenCalledExactlyOnceWith(streamId);
+                await manager.stop(streamId);
+            } else if (outcome === 'probe failure') {
+                const error = new Error('probe failed');
+                input.reject(error);
+                expect(await settled).toBe(error);
+                await vi.waitFor(() => expect(stream.stop).toHaveBeenCalledOnce());
+                expect(stream.start).not.toHaveBeenCalled();
+            } else {
+                await manager.stop(streamId);
+                expect(await settled).toMatchObject({ message: 'StreamStartStopped' });
+                input.resolve(delivery);
+                await vi.waitFor(() => expect(delivery.release).toHaveBeenCalledOnce());
+                expect(stream.start).not.toHaveBeenCalled();
+            }
+        },
+    );
+
+    it.each(['stop', 'timeout', 'writer failure'])(
+        'releases an unattached TS reader exactly once after %s',
+        async outcome => {
+            vi.useFakeTimers();
+            const writer = deferred<void>();
+            const input = deferred<{
+                readonly recordedId: number;
+                readonly release: () => Promise<void>;
+                readonly source: Omit<ReturnType<typeof makeDelivery>['source'], 'kind'> & {
+                    readonly kind: 'completed-file-reader';
+                    readonly reader: { readonly close: () => Promise<void> };
+                };
+            }>();
+            const startHlsWriterEarly = vi.fn((_streamId: number) => writer.promise);
+            const stream = Object.assign(fakeStream({ type: 'RecordedHLS' }), { startHlsWriterEarly });
+            const consumer = {
+                acquireAndOpen: vi.fn(
+                    (
+                        _id: number,
+                        _position: number,
+                        _active: () => boolean,
+                        option: { onCompletedTsResolved: () => void },
+                    ) => {
+                        option.onCompletedTsResolved();
+                        return input.promise;
+                    },
+                ),
+            };
+            const manager = makeManager(consumer);
+            const starting = manager.startRecorded(
+                async () => stream,
+                recordedStartOption({
+                    configureEarlyHls: vi.fn(() => true),
+                    pendingInfoType: 'RecordedHLS',
+                    playPosition: 10,
+                    usesManagedId: true,
+                }),
+            );
+            const settled = starting.catch((error: unknown) => error);
+            await vi.waitFor(() => expect(startHlsWriterEarly).toHaveBeenCalledOnce());
+            const [[streamId]] = startHlsWriterEarly.mock.calls;
+
+            const delivery = makeDelivery();
+            const close = vi.fn(async () => undefined);
+            const completedTs = {
+                ...delivery,
+                source: { ...delivery.source, kind: 'completed-file-reader' as const, reader: { close } },
+            };
+            if (outcome === 'writer failure') {
+                const failure = new Error('CreateStreamProcessError');
+                writer.reject(failure);
+                await vi.advanceTimersByTimeAsync(0);
+                await vi.waitFor(() => expect(stream.stop).toHaveBeenCalledOnce());
+                expect(await settled).toBe(failure);
+                input.resolve(completedTs);
+            } else {
+                input.resolve(completedTs);
+                await vi.advanceTimersByTimeAsync(0);
+                expect(close).not.toHaveBeenCalled();
+                expect(stream.adoptPlaybackSource).not.toHaveBeenCalled();
+                if (outcome === 'stop') {
+                    await manager.stop(streamId);
+                    expect(close).toHaveBeenCalledOnce();
+                    expect(delivery.release).toHaveBeenCalledOnce();
+                } else {
+                    await vi.advanceTimersByTimeAsync(30_000);
+                }
+                expect(await settled).toMatchObject({
+                    message: outcome === 'stop' ? 'StreamStartStopped' : 'StreamStartTimeout',
+                });
+                await vi.waitFor(() => expect(delivery.release).toHaveBeenCalledOnce());
+                writer.resolve();
+            }
+
+            await vi.advanceTimersByTimeAsync(0);
+            expect(close).toHaveBeenCalledOnce();
+            expect(delivery.release).toHaveBeenCalledOnce();
+            expect(stream.adoptPlaybackSource).not.toHaveBeenCalled();
+            expect(stream.start).not.toHaveBeenCalled();
+            expect(manager.getStreamInfos()).toEqual([]);
+        },
+    );
+
     it('[MD-10.2] acquireRecordedDelivery releases the delivery and rejects StreamStartStopped when the caller became inactive', async () => {
         const delivery = makeDelivery();
         let active = true;

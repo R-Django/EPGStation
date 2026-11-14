@@ -231,7 +231,7 @@ interface IRecordedPlaybackSourceProvider {
         videoFileId: number,
         expectedRecordedId: number,
         playPosition: number,
-        option?: { readonly allowMissingVideoInfo?: boolean },
+        option?: { readonly allowMissingVideoInfo?: boolean; readonly onCompletedTsResolved?: () => void },
     ): Promise<OpenedRecordedPlaybackSource>;
 }
 ```
@@ -241,6 +241,9 @@ interface IRecordedPlaybackSourceProvider {
 `resolveRecordedId()`が返したrecorded IDをconsumerがlease取得にだけ用い、`open(videoFileId, expectedRecordedId)`は同じ
 video file/recorded対応を再読取して一致を検証する。対応が消失または別recorded IDへ変わった場合はsourceを返さず失敗するた
 め、一つのleaseを別のrecorded IDのsourceへ付け替えない。
+
+録画完了済みTSでは、実pathを確定した後、動画情報の取得前に`onCompletedTsResolved`を呼ぶ。通知は入力検証やreaderの取得
+完了を示さず、sourceの採用と回収の契約は`OpenedRecordedPlaybackSource`が担う。
 
 録画ファイルのreader variantは、読取開始位置を`Math.floor((bitRate / 8) * playPosition)`で概算する。動画情報の`bitRate`が
 有限でない（ffprobeが`format.bit_rate`を返さず、5.7で`NaN`になる）場合は次のとおりに扱う。`playPosition`が0のときは開始位
