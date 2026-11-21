@@ -1,5 +1,5 @@
 import type { MutableRefObject } from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { syncViewportHeightVariable } from '@/app/hooks/useFixedShellViewport'
 import {
   detectOrientationLockSupport,
@@ -64,6 +64,9 @@ export function usePlaybackFullscreen({
   const [isFullscreenFallback, setIsFullscreenFallback] = useState(false)
   const [canLockOrientation, setCanLockOrientation] = useState(detectOrientationLockSupport)
   const [isPictureInPictureEnabled, setIsPictureInPictureEnabled] = useState(false)
+  const nativeFullscreenCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => nativeFullscreenCleanupRef.current?.(), [])
 
   // Refs must not be read during render (react-hooks/refs), so the initial Picture-in-Picture
   // support check runs here instead of inline during render. This alone is not sufficient on
@@ -100,6 +103,31 @@ export function usePlaybackFullscreen({
       return false
     }
 
+    nativeFullscreenCleanupRef.current?.()
+    let wasPlaying = !video.paused
+    let pauseAt = -Infinity
+    let wasPlayingAtPause = false
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = () => {
+      video.removeEventListener('webkitbeginfullscreen', handleBegin)
+      video.removeEventListener('webkitendfullscreen', handleEnd)
+      video.removeEventListener('play', handlePlay)
+      video.removeEventListener('pause', handlePause)
+      if (resumeTimer !== undefined) {
+        clearTimeout(resumeTimer)
+      }
+      if (nativeFullscreenCleanupRef.current === cleanup) {
+        nativeFullscreenCleanupRef.current = null
+      }
+    }
+    const handlePlay = () => {
+      wasPlaying = true
+    }
+    const handlePause = () => {
+      pauseAt = performance.now()
+      wasPlayingAtPause = wasPlaying
+      wasPlaying = false
+    }
     const handleBegin = () => {
       setIsFullscreen(true)
     }
@@ -107,9 +135,31 @@ export function usePlaybackFullscreen({
       video.removeEventListener('webkitbeginfullscreen', handleBegin)
       video.removeEventListener('webkitendfullscreen', handleEnd)
       setIsFullscreen(false)
+      const exitAt = performance.now()
+      const sourceAtExit = video.currentSrc
+      // WebKit can pause just before or after the native fullscreen exit event.
+      resumeTimer = setTimeout(() => {
+        const exitAdjacentPause = pauseAt >= exitAt - 50 && pauseAt <= exitAt + 400
+        if (
+          exitAdjacentPause &&
+          wasPlayingAtPause &&
+          video.paused &&
+          videoRef.current === video &&
+          video.currentSrc === sourceAtExit &&
+          document.visibilityState === 'visible' &&
+          !video.seeking &&
+          !video.ended
+        ) {
+          void video.play().catch(() => undefined)
+        }
+        cleanup()
+      }, 1200)
     }
     video.addEventListener('webkitbeginfullscreen', handleBegin)
     video.addEventListener('webkitendfullscreen', handleEnd)
+    video.addEventListener('play', handlePlay)
+    video.addEventListener('pause', handlePause)
+    nativeFullscreenCleanupRef.current = cleanup
 
     enterFullscreen.call(video)
     return true

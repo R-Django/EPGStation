@@ -73,6 +73,7 @@ export function usePlaybackVideoEvents({
       controls.scheduleControlsHide({ force: true })
     },
     onPlaying: clearLoadingOnPlaybackEvent,
+    onRateChange: media.handleRateChange,
     onSeeking: seek.handleSeeking,
     onTimeUpdate: seek.handleTimeUpdate,
     onVolumeChange: media.handleVolumeChange,

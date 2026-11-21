@@ -29,6 +29,7 @@ export function usePlaybackMediaElement({
   const [duration, setDuration] = useState(0)
   const [isMediaElementLoading, setIsMediaElementLoading] = useState(false)
   const [playbackRate, setPlaybackRate] = useState(1)
+  const previousDefaultPlaybackRateRef = useRef(1)
   const [volume, setVolume] = useState(1)
   const [muted, setMuted] = useState(false)
   const [hasMediaReachedCanPlay, setHasMediaReachedCanPlay] = useState(false)
@@ -89,6 +90,28 @@ export function usePlaybackMediaElement({
     },
     [videoRef],
   )
+
+  const handleRateChange = () => {
+    const video = videoRef.current
+    if (video === null) {
+      return
+    }
+    const defaultRateChanged = video.defaultPlaybackRate !== previousDefaultPlaybackRateRef.current
+    previousDefaultPlaybackRateRef.current = video.defaultPlaybackRate
+    // Native iPhone controls may update only the default rate while paused.
+    if (
+      video.paused &&
+      'webkitDisplayingFullscreen' in video &&
+      video.webkitDisplayingFullscreen === true &&
+      defaultRateChanged &&
+      video.playbackRate !== video.defaultPlaybackRate &&
+      Number.isFinite(video.defaultPlaybackRate) &&
+      video.defaultPlaybackRate > 0
+    ) {
+      video.playbackRate = video.defaultPlaybackRate
+    }
+    setPlaybackRate(video.playbackRate)
+  }
 
   const toggleMute = useCallback(() => {
     const video = videoRef.current
@@ -197,6 +220,7 @@ export function usePlaybackMediaElement({
     togglePlay,
     markPlaying,
     setVideoPlaybackRate,
+    handleRateChange,
     toggleMute,
     setVolumeFromInput,
     handleDurationChange,
