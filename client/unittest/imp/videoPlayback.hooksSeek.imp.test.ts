@@ -1,6 +1,6 @@
 import type { MutableRefObject } from 'react'
 import { act, renderHook } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   usePlaybackSeek,
   type ResumeAfterRestart,
@@ -31,6 +31,25 @@ function makeVideo({
   return video
 }
 
+function captureAnimationFrames() {
+  const callbacks: FrameRequestCallback[] = []
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    callbacks.push(callback)
+    return callbacks.length
+  })
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
+  return () => {
+    const callback = callbacks.shift()
+    if (callback === undefined) throw new Error('No pending animation frame')
+    act(() => callback(0))
+  }
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
 function setup(
   overrides: {
     videoRef?: MutableRefObject<HTMLVideoElement | null>
@@ -51,8 +70,13 @@ function setup(
   const setCurrentTime = vi.fn()
   const restartPlaybackAt = vi.fn()
 
-  const { result, rerender } = renderHook(
-    (props: { currentTime: number; duration: number; effectiveDuration: number }) =>
+  const { result, rerender, unmount } = renderHook(
+    (props: {
+      currentTime: number
+      duration: number
+      effectiveDuration: number
+      activePlaybackStartUrl: string | undefined
+    }) =>
       usePlaybackSeek({
         kind: overrides.kind ?? 'live',
         videoRef,
@@ -64,7 +88,7 @@ function setup(
         effectiveDuration: props.effectiveDuration,
         canSeek: overrides.canSeek ?? true,
         activeBaseSeekSeconds: overrides.activeBaseSeekSeconds ?? 0,
-        activePlaybackStartUrl: overrides.activePlaybackStartUrl,
+        activePlaybackStartUrl: props.activePlaybackStartUrl,
         restartPlaybackAt,
         onBeforeSeek: overrides.onBeforeSeek,
       }),
@@ -73,6 +97,7 @@ function setup(
         currentTime: overrides.currentTime ?? 0,
         duration: overrides.duration ?? 100,
         effectiveDuration: overrides.effectiveDuration ?? 100,
+        activePlaybackStartUrl: overrides.activePlaybackStartUrl,
       },
     },
   )
@@ -80,6 +105,7 @@ function setup(
   return {
     result,
     rerender,
+    unmount,
     videoRef,
     isPausedRef,
     resumeAfterRestartRef,
@@ -133,6 +159,7 @@ describe('usePlaybackSeek seekBy contract', () => {
   })
 
   it.each(['hls', 'webm', 'mp4'])('captures a frame before %s stream restart', (format) => {
+    const nextFrame = captureAnimationFrames()
     const video = makeVideo({ currentTime: 5, duration: 60 })
     const capture = vi.fn()
     const { result, restartPlaybackAt } = setup({
@@ -146,6 +173,10 @@ describe('usePlaybackSeek seekBy contract', () => {
     })
     act(() => result.current.seekBy(100))
     expect(capture).toHaveBeenCalledExactlyOnceWith(false)
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
     expect(restartPlaybackAt).toHaveBeenCalledOnce()
   })
 
@@ -189,6 +220,7 @@ describe('usePlaybackSeek seekBy contract', () => {
   })
 
   it('[AC 5.3] restarts playback with a rebuilt URL and preserves rate/paused state for an out-of-segment seek', () => {
+    const nextFrame = captureAnimationFrames()
     const video = makeVideo({ currentTime: 5, duration: 60, playbackRate: 1.5 })
     const isPausedRef = ref(true)
     const { result, restartPlaybackAt, resumeAfterRestartRef } = setup({
@@ -206,8 +238,157 @@ describe('usePlaybackSeek seekBy contract', () => {
       result.current.seekBy(400)
     })
 
+    nextFrame()
+    nextFrame()
+
     expect(restartPlaybackAt).toHaveBeenCalledWith('./api/streams/recorded/1/webm?mode=0&ss=405')
     expect(resumeAfterRestartRef.current).toStrictEqual({ playbackRate: 1.5, wasPaused: true })
+  })
+
+  it('uses the last target when another seek arrives before the stream restarts', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ currentTime: 5, duration: 60 })
+    const { result, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      currentTime: 105,
+      effectiveDuration: 500,
+    })
+    act(() => result.current.seekBy(100))
+    act(() => result.current.seekBy(115))
+    nextFrame()
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
+    expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+      './api/streams/recorded/1/webm?mode=0&ss=220',
+    )
+  })
+
+  it('does not restart a stream after the player unmounts', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ duration: 60 })
+    const { result, unmount, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      effectiveDuration: 500,
+    })
+    act(() => result.current.seekBy(205))
+    unmount()
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+  })
+
+  it('discards a pending restart when the playback URL changes', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ duration: 60 })
+    const { result, rerender, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      effectiveDuration: 500,
+    })
+    act(() => result.current.seekBy(205))
+    rerender({
+      currentTime: 0,
+      duration: 100,
+      effectiveDuration: 500,
+      activePlaybackStartUrl: './api/streams/recorded/2/webm?mode=0&ss=0',
+    })
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+  })
+
+  it('keeps an in-range seek when it replaces a pending stream restart', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ duration: 60 })
+    const activePlaybackStartUrl = './api/streams/recorded/1/webm?mode=0&ss=100'
+    const { result, rerender, restartPlaybackAt, resumeAfterRestartRef } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl,
+      effectiveDuration: 500,
+    })
+    act(() => result.current.seekBy(205))
+    rerender({ currentTime: 110, duration: 100, effectiveDuration: 500, activePlaybackStartUrl })
+    act(() => result.current.seekBy(5))
+    nextFrame()
+    expect(video.currentTime).toBe(15)
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    expect(resumeAfterRestartRef.current).toBeNull()
+  })
+
+  it('waits for a paint opportunity after a seek bar commit', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ duration: 60 })
+    const { result, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/hls?mode=0&ss=100',
+      effectiveDuration: 500,
+    })
+    act(() => result.current.previewSeekBarTime(205))
+    act(() => result.current.commitSeekBarTime())
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
+    expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+      './api/streams/recorded/1/hls?mode=0&ss=205',
+    )
+  })
+
+  it('commits a seek bar position once when pointer and mouse release both fire', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ duration: 60 })
+    const capture = vi.fn()
+    const { result, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/hls?mode=0&ss=100',
+      effectiveDuration: 500,
+      onBeforeSeek: capture,
+    })
+    const input = document.createElement('input')
+    input.value = '205'
+    result.current.rangeSeekElementRef.current = input
+    act(() => result.current.previewSeekBarTime(205))
+    act(() => result.current.commitSeekBarTime())
+    act(() => result.current.commitSeekBarTime())
+    expect(capture).toHaveBeenCalledTimes(1)
+    nextFrame()
+    nextFrame()
+    expect(restartPlaybackAt).toHaveBeenCalledOnce()
+  })
+
+  it('uses a timer only when the page is hidden before the next paint', () => {
+    captureAnimationFrames()
+    vi.useFakeTimers()
+    const video = makeVideo({ duration: 60 })
+    const { result, restartPlaybackAt } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      effectiveDuration: 500,
+    })
+    act(() => result.current.seekBy(205))
+    act(() => vi.advanceTimersByTime(200))
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => vi.advanceTimersByTime(200))
+    expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+      './api/streams/recorded/1/webm?mode=0&ss=205',
+    )
   })
 
   it('clamps a negative/non-finite seek target to zero', () => {

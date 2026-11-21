@@ -1,5 +1,5 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { rebuildDirectStreamUrlForSeek } from '../playbackLifecycle'
 import { clampPlaybackSeek } from '../playbackControls'
 import { readSeekSeconds } from '../lib/playbackShellSupport'
@@ -43,9 +43,52 @@ export function usePlaybackSeek({
   const [pendingSeekTime, setPendingSeekTime] = useState<number | null>(null)
   const pendingSeekTimeRef = useRef<number | null>(null)
   const rangeSeekElementRef = useRef<HTMLInputElement | null>(null)
+  const pendingRestartRef = useRef<{ frame: number | null; timer: number | null } | null>(null)
+
+  const cancelPendingRestart = useCallback(() => {
+    const pending = pendingRestartRef.current
+    pendingRestartRef.current = null
+    if (pending?.frame !== null && pending?.frame !== undefined) {
+      window.cancelAnimationFrame(pending.frame)
+    }
+    if (pending?.timer !== null && pending?.timer !== undefined) {
+      window.clearTimeout(pending.timer)
+    }
+  }, [])
+
+  useEffect(() => cancelPendingRestart, [activePlaybackStartUrl, cancelPendingRestart, kind])
+
+  const schedulePlaybackRestart = useCallback(
+    (nextUrl: string, resume: ResumeAfterRestart) => {
+      cancelPendingRestart()
+      const pending = { frame: null as number | null, timer: null as number | null }
+      pendingRestartRef.current = pending
+      const restart = () => {
+        if (pendingRestartRef.current !== pending) return
+        cancelPendingRestart()
+        resumeAfterRestartRef.current = resume
+        restartPlaybackAt(nextUrl)
+      }
+      pending.frame = window.requestAnimationFrame(() => {
+        if (pendingRestartRef.current !== pending) return
+        pending.frame = window.requestAnimationFrame(restart)
+      })
+      const restartIfHidden = () => {
+        if (pendingRestartRef.current !== pending) return
+        if (document.visibilityState === 'hidden') {
+          restart()
+        } else {
+          pending.timer = window.setTimeout(restartIfHidden, 200)
+        }
+      }
+      pending.timer = window.setTimeout(restartIfHidden, 200)
+    },
+    [cancelPendingRestart, restartPlaybackAt, resumeAfterRestartRef],
+  )
 
   const seekToPlaybackTime = useCallback(
     (nextTime: number) => {
+      cancelPendingRestart()
       const video = videoRef.current
       const normalizedTime = Number.isFinite(nextTime) && nextTime > 0 ? nextTime : 0
       if (video === null) {
@@ -75,30 +118,31 @@ export function usePlaybackSeek({
         return
       }
 
-      resumeAfterRestartRef.current = {
+      const resume = {
         playbackRate: video.playbackRate,
         wasPaused: isPausedRef.current,
       }
 
       onBeforeSeek?.(isPausedRef.current)
 
-      restartPlaybackAt(
+      schedulePlaybackRestart(
         rebuildDirectStreamUrlForSeek(
           activePlaybackStartUrl,
           Math.max(0, Math.floor(normalizedTime)),
         ),
+        resume,
       )
       setCurrentTime(normalizedTime)
     },
     [
       activeBaseSeekSeconds,
       activePlaybackStartUrl,
+      cancelPendingRestart,
       duration,
       isPausedRef,
       kind,
       onBeforeSeek,
-      restartPlaybackAt,
-      resumeAfterRestartRef,
+      schedulePlaybackRestart,
       setCurrentTime,
       videoRef,
     ],
@@ -131,6 +175,9 @@ export function usePlaybackSeek({
 
   const commitSeekBarTime = useCallback(
     (nextTime: number | null = pendingSeekTimeRef.current) => {
+      if (nextTime === null && pendingRestartRef.current !== null) {
+        return
+      }
       if (nextTime === null && rangeSeekElementRef.current !== null) {
         const elementValue = Number(
           rangeSeekElementRef.current.dataset.pendingSeekTime ?? rangeSeekElementRef.current.value,
