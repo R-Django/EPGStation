@@ -247,6 +247,105 @@ describe('usePlaybackFullscreen toggle/exit contract', () => {
     expect(result.current.isFullscreen).toBe(false)
   })
 
+  it('resumes a native exit-adjacent pause, including when pause arrives after fullscreen exit', async () => {
+    vi.useFakeTimers()
+    try {
+      const player = document.createElement('div')
+      const video = document.createElement('video')
+      let paused = false
+      Object.defineProperty(video, 'paused', { configurable: true, get: () => paused })
+      Object.defineProperty(video, 'webkitEnterFullscreen', { configurable: true, value: vi.fn() })
+      const play = vi.fn(async () => {
+        paused = false
+      })
+      Object.defineProperty(video, 'play', { configurable: true, value: play })
+      const videoRef = ref<HTMLVideoElement | null>(video)
+      const { result } = renderHook(() =>
+        usePlaybackFullscreen({ playerRef: ref<HTMLElement | null>(player), videoRef }),
+      )
+
+      act(() => {
+        result.current.toggleFullscreen()
+        video.dispatchEvent(new Event('webkitbeginfullscreen'))
+        video.dispatchEvent(new Event('webkitendfullscreen'))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(320)
+        paused = true
+        video.dispatchEvent(new Event('pause'))
+        await vi.advanceTimersByTimeAsync(880)
+      })
+      expect(play).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resumes when native fullscreen pauses immediately before the exit event', async () => {
+    vi.useFakeTimers()
+    try {
+      const video = document.createElement('video')
+      let paused = false
+      Object.defineProperty(video, 'paused', { configurable: true, get: () => paused })
+      Object.defineProperty(video, 'webkitEnterFullscreen', { configurable: true, value: vi.fn() })
+      const play = vi.fn(async () => {
+        paused = false
+      })
+      Object.defineProperty(video, 'play', { configurable: true, value: play })
+      const { result } = renderHook(() =>
+        usePlaybackFullscreen({
+          playerRef: ref<HTMLElement | null>(document.createElement('div')),
+          videoRef: ref(video),
+        }),
+      )
+
+      act(() => {
+        result.current.toggleFullscreen()
+        video.dispatchEvent(new Event('webkitbeginfullscreen'))
+        paused = true
+        video.dispatchEvent(new Event('pause'))
+        video.dispatchEvent(new Event('webkitendfullscreen'))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1200)
+      })
+      expect(play).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps an intentional pause made well before native fullscreen exit', async () => {
+    vi.useFakeTimers()
+    try {
+      const player = document.createElement('div')
+      const video = document.createElement('video')
+      let paused = false
+      Object.defineProperty(video, 'paused', { configurable: true, get: () => paused })
+      Object.defineProperty(video, 'webkitEnterFullscreen', { configurable: true, value: vi.fn() })
+      const play = vi.fn(async () => undefined)
+      Object.defineProperty(video, 'play', { configurable: true, value: play })
+      const { result } = renderHook(() =>
+        usePlaybackFullscreen({ playerRef: ref<HTMLElement | null>(player), videoRef: ref(video) }),
+      )
+
+      act(() => {
+        result.current.toggleFullscreen()
+        video.dispatchEvent(new Event('webkitbeginfullscreen'))
+        paused = true
+        video.dispatchEvent(new Event('pause'))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+        video.dispatchEvent(new Event('webkitendfullscreen'))
+        await vi.advanceTimersByTimeAsync(1200)
+      })
+      expect(play).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('[AC 4.6] falls back to the CSS-only fullscreen state, not webkitEnterFullscreen(), when requestFullscreen() rejects even though the video supports native fullscreen', async () => {
     // requestFullscreen() existing but rejecting once does not prove container
     // fullscreen is truly unusable. Falling back to webkitEnterFullscreen() here is what let

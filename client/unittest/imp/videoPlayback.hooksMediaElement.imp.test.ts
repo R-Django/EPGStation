@@ -130,6 +130,35 @@ describe('usePlaybackMediaElement contract', () => {
     expect(video.playbackRate).toBe(0.1)
   })
 
+  it('uses a native fullscreen speed selected while paused for the next playback', () => {
+    const video = makeVideo()
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+    Object.defineProperty(video, 'webkitDisplayingFullscreen', { configurable: true, value: true })
+    const { result } = setup({ videoRef: ref(video) })
+
+    video.defaultPlaybackRate = 1.5
+    act(() => result.current.handleRateChange())
+
+    expect(video.playbackRate).toBe(1.5)
+    expect(result.current.playbackRate).toBe(1.5)
+  })
+
+  it('does not replace the effective rate when the default rate changes during playback', () => {
+    const video = makeVideo()
+    Object.defineProperty(video, 'paused', { configurable: true, value: false })
+    Object.defineProperty(video, 'webkitDisplayingFullscreen', { configurable: true, value: true })
+    const { result } = setup({ videoRef: ref(video) })
+
+    video.defaultPlaybackRate = 2
+    act(() => result.current.handleRateChange())
+
+    expect(video.playbackRate).toBe(1)
+    expect(result.current.playbackRate).toBe(1)
+    video.playbackRate = 2
+    act(() => result.current.handleRateChange())
+    expect(result.current.playbackRate).toBe(2)
+  })
+
   it('updates the playback rate state without a mounted video element', () => {
     const { result } = setup()
 
