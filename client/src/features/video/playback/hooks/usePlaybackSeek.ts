@@ -242,7 +242,7 @@ export function usePlaybackSeek({
     if (video === null) {
       return
     }
-    if (pendingSeekTime !== null) {
+    if (pendingSeekTime !== null || pendingRestartRef.current !== null) {
       return
     }
     const relativeTime =

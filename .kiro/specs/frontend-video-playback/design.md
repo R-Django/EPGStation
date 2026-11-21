@@ -584,6 +584,8 @@ fallback するため、常にビットマップをそのまま描く方が、�
 - recorded HLS の segment 外 seek は stream start URL の `ss` を absolute seconds に更新し、古い HLS
   lifecycle を cleanup してから新しい lifecycle を開始する。manifest parsed 後は autoplay を試行し、playback
   rate と paused/playing state を復元する。stream start の一時失敗は HLS lifecycle retry contract に従って復旧を試み、retry 成功時は snackbar を出さない。
+- 録画配信の読み直しを待つ間、`usePlaybackSeek` は切替元動画の `timeupdate` を表示用時刻へ反映せず、
+  シークの目標位置を保持する。読み直しの予約が解除された後は動画の時刻更新を反映する。
 
 ## データモデル
 

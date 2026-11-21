@@ -267,6 +267,40 @@ describe('usePlaybackSeek seekBy contract', () => {
     )
   })
 
+  it.each(['hls', 'webm', 'mp4'])(
+    'keeps the target time while a %s stream restart waits for the next paint',
+    (format) => {
+      const nextFrame = captureAnimationFrames()
+      const video = makeVideo({ currentTime: 50, duration: 60 })
+      const { result, setCurrentTime, restartPlaybackAt } = setup({
+        videoRef: ref(video),
+        kind: 'recorded-streaming',
+        activeBaseSeekSeconds: 100,
+        activePlaybackStartUrl: `./api/streams/recorded/1/${format}?mode=0&ss=100`,
+        currentTime: 150,
+        effectiveDuration: 500,
+      })
+
+      act(() => result.current.seekBy(30))
+      expect(setCurrentTime).toHaveBeenLastCalledWith(180)
+      setCurrentTime.mockClear()
+
+      video.currentTime = 51
+      act(() => result.current.handleTimeUpdate())
+      expect(setCurrentTime).not.toHaveBeenCalled()
+      expect(restartPlaybackAt).not.toHaveBeenCalled()
+
+      nextFrame()
+      act(() => result.current.handleTimeUpdate())
+      expect(setCurrentTime).not.toHaveBeenCalled()
+
+      nextFrame()
+      expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+        `./api/streams/recorded/1/${format}?mode=0&ss=180`,
+      )
+    },
+  )
+
   it('does not restart a stream after the player unmounts', () => {
     const nextFrame = captureAnimationFrames()
     const video = makeVideo({ duration: 60 })
@@ -308,7 +342,7 @@ describe('usePlaybackSeek seekBy contract', () => {
     const nextFrame = captureAnimationFrames()
     const video = makeVideo({ duration: 60 })
     const activePlaybackStartUrl = './api/streams/recorded/1/webm?mode=0&ss=100'
-    const { result, rerender, restartPlaybackAt, resumeAfterRestartRef } = setup({
+    const { result, rerender, restartPlaybackAt, resumeAfterRestartRef, setCurrentTime } = setup({
       videoRef: ref(video),
       kind: 'recorded-streaming',
       activeBaseSeekSeconds: 100,
@@ -322,6 +356,9 @@ describe('usePlaybackSeek seekBy contract', () => {
     expect(video.currentTime).toBe(15)
     expect(restartPlaybackAt).not.toHaveBeenCalled()
     expect(resumeAfterRestartRef.current).toBeNull()
+    setCurrentTime.mockClear()
+    act(() => result.current.handleTimeUpdate())
+    expect(setCurrentTime).toHaveBeenCalledExactlyOnceWith(115)
   })
 
   it('waits for a paint opportunity after a seek bar commit', () => {
