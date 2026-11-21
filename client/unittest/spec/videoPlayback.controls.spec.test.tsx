@@ -169,6 +169,19 @@ describe('Video playback requirement 4: shared player controls', () => {
     expect(video.playbackRate).toBe(1)
   })
 
+  it('[AC 4.6e] reflects a paused native fullscreen speed selection in playback and controls', async () => {
+    const { video } = await renderReadyDirectPlayer()
+    setVideoDuration(video, 600)
+    Object.defineProperty(video, 'paused', { configurable: true, value: true })
+    Object.defineProperty(video, 'webkitDisplayingFullscreen', { configurable: true, value: true })
+
+    video.defaultPlaybackRate = 1.5
+    fireEvent.rateChange(video)
+
+    expect(video.playbackRate).toBe(1.5)
+    expect(screen.getByTestId('playback-speed-controls')).toHaveTextContent('X1.5')
+  })
+
   it('[AC 4.11] [AC 4.15] hides the volume slider and speed controls on a narrow viewport but keeps the volume button', async () => {
     const { video } = await renderReadyDirectPlayer(390)
     setVideoDuration(video, 600)
