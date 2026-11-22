@@ -83,10 +83,12 @@ describe('Recorded detail Task 3 route, data, and actions', () => {
       fireEvent.change(seekBar, { target: { value: '120' } })
       fireEvent.pointerUp(seekBar)
 
-      expect(player).toHaveAttribute(
-        'data-playback-media-url',
-        `./api/streams/recorded/701/${streamingType}?mode=0&ss=120`,
-      )
+      await waitFor(() => {
+        expect(player).toHaveAttribute(
+          'data-playback-media-url',
+          `./api/streams/recorded/701/${streamingType}?mode=0&ss=120`,
+        )
+      })
       await waitFor(() => {
         expect(playSpy).toHaveBeenCalled()
       })

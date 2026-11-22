@@ -267,6 +267,66 @@ describe('usePlaybackSeek seekBy contract', () => {
     )
   })
 
+  it('ignores a cancelled second animation frame and restarts at the latest seek target', () => {
+    const nextFrame = captureAnimationFrames()
+    const video = makeVideo({ currentTime: 5, duration: 60, playbackRate: 1.5 })
+    const { result, restartPlaybackAt, resumeAfterRestartRef } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      currentTime: 105,
+      effectiveDuration: 500,
+    })
+
+    act(() => result.current.seekBy(100))
+    nextFrame()
+    act(() => result.current.seekBy(115))
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    expect(resumeAfterRestartRef.current).toBeNull()
+
+    nextFrame()
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    nextFrame()
+    expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+      './api/streams/recorded/1/webm?mode=0&ss=220',
+    )
+    expect(resumeAfterRestartRef.current).toStrictEqual({ playbackRate: 1.5, wasPaused: false })
+  })
+
+  it('ignores a cancelled hidden-page timer and restarts at the latest seek target', () => {
+    captureAnimationFrames()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const setTimeout = vi.spyOn(window, 'setTimeout')
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValueOnce('hidden')
+    const video = makeVideo({ currentTime: 5, duration: 60, playbackRate: 1.5 })
+    const { result, restartPlaybackAt, resumeAfterRestartRef } = setup({
+      videoRef: ref(video),
+      kind: 'recorded-streaming',
+      activeBaseSeekSeconds: 100,
+      activePlaybackStartUrl: './api/streams/recorded/1/webm?mode=0&ss=100',
+      currentTime: 105,
+      effectiveDuration: 500,
+    })
+
+    act(() => result.current.seekBy(100))
+    const cancelledTimer = setTimeout.mock.calls.find(([, delay]) => delay === 200)?.[0]
+    setTimeout.mockRestore()
+    if (typeof cancelledTimer !== 'function') throw new Error('No pending hidden-page timer')
+
+    act(() => result.current.seekBy(115))
+    act(() => cancelledTimer())
+    expect(restartPlaybackAt).not.toHaveBeenCalled()
+    expect(resumeAfterRestartRef.current).toBeNull()
+
+    act(() => vi.advanceTimersByTime(200))
+    expect(restartPlaybackAt).toHaveBeenCalledExactlyOnceWith(
+      './api/streams/recorded/1/webm?mode=0&ss=220',
+    )
+    expect(resumeAfterRestartRef.current).toStrictEqual({ playbackRate: 1.5, wasPaused: false })
+  })
+
   it.each(['hls', 'webm', 'mp4'])(
     'keeps the target time while a %s stream restart waits for the next paint',
     (format) => {

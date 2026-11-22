@@ -269,8 +269,8 @@ describe('Recorded detail Task 3 route, data, and actions', () => {
           'data-playback-stream-start-url',
           './api/streams/recorded/701/hls?mode=0&ss=120',
         )
+        expect(startedUrls).toContain('./api/streams/recorded/701/hls?mode=0&ss=120')
       })
-      expect(startedUrls).toContain('./api/streams/recorded/701/hls?mode=0&ss=120')
       expect(drawImage).toHaveBeenCalledOnce()
       expect(screen.getByTestId('playback-seek-frame')).toHaveAttribute(
         'data-visible',
